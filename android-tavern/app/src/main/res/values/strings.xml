@@ -58,6 +58,7 @@
     <string name="bootstrap_settings_extensions_author_unknown">未标注作者</string>
     <string name="bootstrap_settings_extensions_manifest_missing">manifest.json 缺失或格式无效。</string>
     <string name="bootstrap_settings_extensions_homepage_missing">manifest.json 里没有 homePage，无法重新拉取该扩展。</string>
+    <string name="bootstrap_settings_extensions_homepage_invalid">manifest.json 里的 homePage 不是可用的仓库地址，无法重新拉取该扩展。</string>
     <string name="bootstrap_settings_extensions_install_invalid_url">只支持 HTTP 或 HTTPS 的扩展仓库地址。</string>
     <string name="bootstrap_settings_extensions_install_prompt_title">安装扩展</string>
     <string name="bootstrap_settings_extensions_install_prompt_hint">输入扩展仓库地址，例如 https://github.com/owner/repo</string>

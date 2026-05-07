@@ -60,6 +60,11 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val targetExists: Boolean
     )
 
+    private data class NormalizedExtensionRepository(
+        val cloneUrl: String,
+        val branch: String?
+    )
+
     private val stoppedPhases = setOf(
         StartupPhase.CONFIGURING,
         StartupPhase.IDLE,
@@ -331,13 +336,17 @@ internal class BootstrapSettingsExtensionsCoordinator(
             showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_missing))
             return
         }
+        val normalizedRepository = normalizeRepositoryUrl(repositoryUrl) ?: run {
+            showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_invalid))
+            return
+        }
 
         activity.lifecycleScope.launch {
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     stopServiceForMaintenance()
-                    runExtensionReinstall(extension.folderName, repositoryUrl)
+                    runExtensionReinstall(extension.folderName, normalizedRepository)
                 }
             }
             setBusyState(false)
@@ -383,26 +392,27 @@ internal class BootstrapSettingsExtensionsCoordinator(
         dialog.setOnShowListener {
             dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val repositoryUrl = inputView.text?.toString().orEmpty().trim()
-                if (!isSupportedRepositoryUrl(repositoryUrl)) {
+                val normalizedRepository = normalizeRepositoryUrl(repositoryUrl)
+                if (normalizedRepository == null) {
                     inputLayout.error = activity.getString(R.string.bootstrap_settings_extensions_install_invalid_url)
                     return@setOnClickListener
                 }
 
                 inputLayout.error = null
                 dialog.dismiss()
-                previewInstallExtension(repositoryUrl)
+                previewInstallExtension(repositoryUrl, normalizedRepository)
             }
         }
         dialog.show()
     }
 
-    private fun previewInstallExtension(repositoryUrl: String) {
+    private fun previewInstallExtension(repositoryUrl: String, normalizedRepository: NormalizedExtensionRepository) {
         activity.lifecycleScope.launch {
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     stopServiceForMaintenance()
-                    runExtensionInstallPreview(repositoryUrl)
+                    runExtensionInstallPreview(repositoryUrl, normalizedRepository)
                 }
             }
             setBusyState(false)
@@ -494,17 +504,21 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
     }
 
-    private fun runExtensionReinstall(folderName: String, repositoryUrl: String) {
+    private fun runExtensionReinstall(folderName: String, repository: NormalizedExtensionRepository) {
         val requestName = "extension-reinstall-${folderName.replace(Regex("[^A-Za-z0-9._-]"), "_")}"
+        val environment = mutableMapOf(
+            "APP_DATA_ROOT" to paths.serverDataDir.absolutePath,
+            "STAI_EXTENSION_TARGET_DIR" to "/tavern/data/extensions/$folderName",
+            "STAI_EXTENSION_REPO_URL" to repository.cloneUrl
+        )
+        repository.branch?.let { branch ->
+            environment["STAI_EXTENSION_REPO_BRANCH"] = branch
+        }
         runExtensionCommand(
             requestName = requestName,
             commandFileName = "$requestName.mjs",
             commandContent = extensionReinstallCommand(),
-            environment = mapOf(
-                "APP_DATA_ROOT" to paths.serverDataDir.absolutePath,
-                "STAI_EXTENSION_TARGET_DIR" to "/tavern/data/extensions/$folderName",
-                "STAI_EXTENSION_REPO_URL" to repositoryUrl
-            ),
+            environment = environment,
             failureMessage = { logPath ->
                 activity.getString(R.string.bootstrap_settings_extensions_runtime_timeout, logPath)
             }
@@ -551,7 +565,10 @@ internal class BootstrapSettingsExtensionsCoordinator(
         return logPath
     }
 
-    private fun runExtensionInstallPreview(repositoryUrl: String): ExtensionInstallPreview {
+    private fun runExtensionInstallPreview(
+        repositoryUrl: String,
+        normalizedRepository: NormalizedExtensionRepository
+    ): ExtensionInstallPreview {
         val previewId = System.currentTimeMillis()
         val requestName = "extension-install-preview-$previewId"
         val maintenanceRoot = File(paths.serverDataDir, ".stai-maintenance")
@@ -560,15 +577,19 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val previewGuestFile = "/tavern/data/.stai-maintenance/${previewHostFile.name}"
         val previewTempDir = File(maintenanceRoot, "$requestName-repo")
         val previewGuestTempDir = "/tavern/data/.stai-maintenance/${previewTempDir.name}"
+        val environment = mutableMapOf(
+            "STAI_EXTENSION_REPO_URL" to normalizedRepository.cloneUrl,
+            "STAI_EXTENSION_PREVIEW_FILE" to previewGuestFile,
+            "STAI_EXTENSION_TEMP_DIR" to previewGuestTempDir
+        )
+        normalizedRepository.branch?.let { branch ->
+            environment["STAI_EXTENSION_REPO_BRANCH"] = branch
+        }
         val logPath = runExtensionCommand(
             requestName = requestName,
             commandFileName = "$requestName.mjs",
             commandContent = extensionInstallPreviewCommand(),
-            environment = mapOf(
-                "STAI_EXTENSION_REPO_URL" to repositoryUrl,
-                "STAI_EXTENSION_PREVIEW_FILE" to previewGuestFile,
-                "STAI_EXTENSION_TEMP_DIR" to previewGuestTempDir
-            ),
+            environment = environment,
             failureMessage = { failedLogPath ->
                 activity.getString(R.string.bootstrap_settings_extensions_install_preview_failed, failedLogPath)
             }
@@ -635,9 +656,107 @@ internal class BootstrapSettingsExtensionsCoordinator(
     }
 
     private fun isSupportedRepositoryUrl(repositoryUrl: String): Boolean {
-        val uri = runCatching { Uri.parse(repositoryUrl) }.getOrNull() ?: return false
+        return normalizeRepositoryUrl(repositoryUrl) != null
+    }
+
+    private fun normalizeRepositoryUrl(repositoryUrl: String): NormalizedExtensionRepository? {
+        val uri = runCatching { Uri.parse(repositoryUrl) }.getOrNull() ?: return null
         val scheme = uri.scheme.orEmpty()
-        return (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)) && !uri.host.isNullOrBlank()
+        val host = uri.host?.lowercase().orEmpty()
+        if (!scheme.equals("http", ignoreCase = true) && !scheme.equals("https", ignoreCase = true)) {
+            return null
+        }
+        if (host.isBlank()) {
+            return null
+        }
+
+        val segments = uri.pathSegments.orEmpty()
+            .map { segment -> segment.trim() }
+            .filter { segment -> segment.isNotEmpty() }
+        if (segments.isEmpty()) {
+            return null
+        }
+
+        return when (host) {
+            "github.com", "www.github.com" -> buildHostedRepositoryUrl(
+                host = "github.com",
+                ownerAndRepo = segments.take(2),
+                branch = segments.getOrNull(2)
+                    ?.takeIf { marker -> marker.equals("blob", ignoreCase = true) || marker.equals("tree", ignoreCase = true) || marker.equals("raw", ignoreCase = true) }
+                    ?.let { _ -> segments.getOrNull(3) }
+            )
+
+            "raw.githubusercontent.com" -> buildHostedRepositoryUrl(
+                host = "github.com",
+                ownerAndRepo = segments.take(2),
+                branch = segments.getOrNull(2)
+            )
+
+            "gitlab.com", "www.gitlab.com" -> {
+                val markerIndex = segments.indexOf("-")
+                val repoSegments = if (markerIndex >= 0) segments.subList(0, markerIndex) else segments
+                val branch = if (
+                    markerIndex >= 0 &&
+                    segments.getOrNull(markerIndex + 1)?.let { marker ->
+                        marker.equals("blob", ignoreCase = true) || marker.equals("tree", ignoreCase = true) || marker.equals("raw", ignoreCase = true)
+                    } == true
+                ) {
+                    segments.getOrNull(markerIndex + 2)
+                } else {
+                    null
+                }
+                buildHostedRepositoryUrl("gitlab.com", repoSegments, branch)
+            }
+
+            else -> {
+                val lastSegment = segments.last()
+                if (lastSegment.equals("manifest.json", ignoreCase = true)) {
+                    return null
+                }
+                val cloneUrl = buildString {
+                    append(scheme.lowercase())
+                    append("://")
+                    append(uri.encodedAuthority)
+                    append(uri.encodedPath?.trimEnd('/'))
+                }
+                NormalizedExtensionRepository(
+                    cloneUrl = cloneUrl,
+                    branch = null
+                )
+            }
+        }
+    }
+
+    private fun buildHostedRepositoryUrl(
+        host: String,
+        ownerAndRepo: List<String>,
+        branch: String?
+    ): NormalizedExtensionRepository? {
+        if (ownerAndRepo.size < 2) {
+            return null
+        }
+        val repoSegments = ownerAndRepo.mapIndexed { index, segment ->
+            if (index == ownerAndRepo.lastIndex) {
+                stripGitSuffix(segment)
+            } else {
+                segment
+            }
+        }
+        if (repoSegments.any { segment -> segment.isBlank() }) {
+            return null
+        }
+        return NormalizedExtensionRepository(
+            cloneUrl = "https://$host/${repoSegments.joinToString("/")}.git",
+            branch = branch?.takeIf { value -> value.isNotBlank() }
+        )
+    }
+
+    private fun stripGitSuffix(value: String): String {
+        return if (value.endsWith(".git", ignoreCase = true)) {
+            value.dropLast(4)
+        } else {
+            value
+        }
     }
 
     private fun extensionRuntimeScript(): String {
@@ -650,7 +769,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             APP_DATA_ROOT="${'$'}{APP_DATA_ROOT:?APP_DATA_ROOT is required}"
             LOGS_DIR="${'$'}{LOGS_DIR:?LOGS_DIR is required}"
             COMMAND_JS="${'$'}{COMMAND_JS:?COMMAND_JS is required}"
-            STAI_EXTENSION_TARGET_DIR="${'$'}{STAI_EXTENSION_TARGET_DIR:?STAI_EXTENSION_TARGET_DIR is required}"
+            STAI_EXTENSION_TARGET_DIR="${'$'}{STAI_EXTENSION_TARGET_DIR:-}"
             STAI_EXTENSION_REPO_URL="${'$'}{STAI_EXTENSION_REPO_URL:?STAI_EXTENSION_REPO_URL is required}"
 
             PROOT_BIN="${'$'}{HOST_PROOT_BIN:?HOST_PROOT_BIN is required}"
@@ -728,6 +847,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
             const targetDir = process.env.STAI_EXTENSION_TARGET_DIR;
             const repoUrl = process.env.STAI_EXTENSION_REPO_URL;
+            const repoBranch = process.env.STAI_EXTENSION_REPO_BRANCH || undefined;
             if (!targetDir || !repoUrl) {
                 throw new Error('Missing extension target or repository URL.');
             }
@@ -742,7 +862,11 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 }
 
                 const git = createGitClient({ backend: 'builtin' });
-                await git.clone(repoUrl, targetDir, { depth: 1 });
+                const cloneOptions = { depth: 1 };
+                if (repoBranch) {
+                    cloneOptions.branch = repoBranch;
+                }
+                await git.clone(repoUrl, targetDir, cloneOptions);
 
                 const manifestPath = path.join(targetDir, 'manifest.json');
                 if (!fs.existsSync(manifestPath)) {
@@ -775,6 +899,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             import { createGitClient } from '/tavern/server/src/git/client.js';
 
             const repoUrl = process.env.STAI_EXTENSION_REPO_URL;
+            const repoBranch = process.env.STAI_EXTENSION_REPO_BRANCH || undefined;
             const previewFile = process.env.STAI_EXTENSION_PREVIEW_FILE;
             const tempDir = process.env.STAI_EXTENSION_TEMP_DIR;
             if (!repoUrl || !previewFile || !tempDir) {
@@ -797,7 +922,11 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 }
 
                 const git = createGitClient({ backend: 'builtin' });
-                await git.clone(parsedUrl.href, tempDir, { depth: 1 });
+                const cloneOptions = { depth: 1 };
+                if (repoBranch) {
+                    cloneOptions.branch = repoBranch;
+                }
+                await git.clone(parsedUrl.href, tempDir, cloneOptions);
 
                 const manifestPath = path.join(tempDir, 'manifest.json');
                 if (!fs.existsSync(manifestPath)) {
