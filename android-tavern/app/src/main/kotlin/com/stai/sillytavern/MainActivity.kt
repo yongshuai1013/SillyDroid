@@ -25,6 +25,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -93,11 +94,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bootstrapOverlay: View
     private lateinit var bootstrapStatus: TextView
     private lateinit var bootstrapRetry: Button
+    private lateinit var bootstrapSettingsButton: ImageButton
     private lateinit var bootstrapProgress: ProgressBar
     private lateinit var backPressCallback: OnBackPressedCallback
     private var webSessionScriptHandler: ScriptHandler? = null
     private var loadedUrl = ""
     private var hasRestoredWebViewState = false
+    private var skipNextWebViewStateRestore = false
+    private var isOpeningBootstrapSettings = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private val webSessionStoragePreferences by lazy {
         getSharedPreferences(webSessionStoragePreferencesName, MODE_PRIVATE)
@@ -109,6 +113,20 @@ class MainActivity : AppCompatActivity() {
         val callback = pendingFileChooserCallback ?: return@registerForActivityResult
         pendingFileChooserCallback = null
         callback.onReceiveValue(resolveFileChooserUris(result.resultCode, result.data))
+    }
+    private val bootstrapSettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        isOpeningBootstrapSettings = false
+        if (result.resultCode == Activity.RESULT_OK && BootstrapSettingsActivity.shouldStartBootstrap(result.data)) {
+            skipNextWebViewStateRestore = true
+            hasRestoredWebViewState = false
+            loadedUrl = ""
+            recreate()
+            return@registerForActivityResult
+        }
+
+        if (StartupRuntimeStore.state.value.phase == StartupPhase.CONFIGURING) {
+            startBootstrap(true)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -124,11 +142,18 @@ class MainActivity : AppCompatActivity() {
         restoreWebViewState(savedInstanceState)
         observeBootstrapState()
         bootstrapRetry.setOnClickListener { startBootstrap(true) }
+        bootstrapSettingsButton.setOnClickListener { openBootstrapSettings() }
         startBootstrap(false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        if (skipNextWebViewStateRestore) {
+            outState.remove(webViewStateKey)
+            outState.remove(loadedUrlStateKey)
+            return
+        }
+
         // Activity 被系统回收后，优先恢复 WebView 现有会话，避免重新 load baseUrl 把页面打回首页。
         val webViewState = Bundle()
         webView.saveState(webViewState)
@@ -141,6 +166,7 @@ class MainActivity : AppCompatActivity() {
         webSessionScriptHandler = null
         pendingFileChooserCallback?.onReceiveValue(null)
         pendingFileChooserCallback = null
+        skipNextWebViewStateRestore = false
         super.onDestroy()
     }
 
@@ -165,6 +191,7 @@ class MainActivity : AppCompatActivity() {
         bootstrapOverlay = findViewById(R.id.bootstrapOverlay)
         bootstrapStatus = findViewById(R.id.bootstrapStatus)
         bootstrapRetry = findViewById(R.id.bootstrapRetry)
+        bootstrapSettingsButton = findViewById(R.id.bootstrapSettingsButton)
         bootstrapProgress = findViewById(R.id.bootstrapProgress)
     }
 
@@ -251,7 +278,7 @@ class MainActivity : AppCompatActivity() {
             "当前设备的 Android System WebView 不支持 document-start script，无法在页面初始化前恢复 sessionStorage。"
         }
 
-        val allowedOriginRules = setOf(BootConfig.localServiceUrl)
+        val allowedOriginRules = setOf(BootConfig.localServiceUrl(this))
         // 宿主只在本地 Tavern 页面注入这条桥，避免把 sessionStorage 固化能力暴露到其他来源。
         WebViewCompat.addWebMessageListener(
             webView,
@@ -265,7 +292,7 @@ class MainActivity : AppCompatActivity() {
                     isMainFrame: Boolean,
                     replyProxy: JavaScriptReplyProxy
                 ) {
-                    if (!isMainFrame || sourceOrigin.toString() != BootConfig.localServiceUrl) {
+                        if (!isMainFrame || sourceOrigin.toString() != BootConfig.localServiceUrl(this@MainActivity)) {
                         return
                     }
 
@@ -282,7 +309,7 @@ class MainActivity : AppCompatActivity() {
         webSessionScriptHandler = WebViewCompat.addDocumentStartJavaScript(
             webView,
             buildWebSessionPersistenceScript(),
-            setOf(BootConfig.localServiceUrl)
+            setOf(BootConfig.localServiceUrl(this))
         )
     }
 
@@ -947,8 +974,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        bootstrapRetry.isVisible = state.canRetry
-        bootstrapProgress.isVisible = !state.canRetry
+        bootstrapRetry.isVisible = state.canRetry || state.phase == StartupPhase.CONFIGURING
+        bootstrapRetry.text = if (state.phase == StartupPhase.CONFIGURING) {
+            getString(R.string.bootstrap_resume)
+        } else {
+            getString(R.string.bootstrap_retry)
+        }
+        bootstrapProgress.isVisible = !state.canRetry && state.phase != StartupPhase.CONFIGURING
+        bootstrapSettingsButton.isVisible = !state.isReady
+        bootstrapSettingsButton.isEnabled = !state.isReady && !isOpeningBootstrapSettings
 
         if (state.isReady) {
             showWebView(state.localUrl)
@@ -979,6 +1013,16 @@ class MainActivity : AppCompatActivity() {
     private fun startBootstrap(forceRestart: Boolean) {
         val intent = StartupCoordinatorService.createStartIntent(this, forceRestart)
         ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun openBootstrapSettings() {
+        if (isOpeningBootstrapSettings) {
+            return
+        }
+
+        isOpeningBootstrapSettings = true
+        bootstrapSettingsButton.isEnabled = false
+        bootstrapSettingsLauncher.launch(BootstrapSettingsActivity.createIntent(this))
     }
 
     private fun isCurrentWebViewPageFor(baseUrl: String): Boolean {

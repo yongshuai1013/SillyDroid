@@ -1,6 +1,17 @@
 name: tavern-upstream-apk
 
 on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - .github/workflows/tavern-upstream-apk.yml
+      - android-tavern/**
+      - gradle/**
+      - gradlew
+      - gradlew.bat
+      - scripts/**
   workflow_dispatch:
     inputs:
       tavern_tag:
@@ -11,7 +22,7 @@ on:
       build_type:
         description: APK 构建类型
         required: false
-        default: debug
+        default: release
         type: choice
         options:
           - debug
@@ -63,7 +74,7 @@ jobs:
         env:
           UPSTREAM_REPO: SillyTavern/SillyTavern
           REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tavern_tag || '' }}
-          REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'debug' }}
+          REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'release' }}
           FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || 'false' }}
           PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'true' }}
         run: |
@@ -214,22 +225,43 @@ jobs:
             exit 0
           fi
 
+          configured_secret_count=0
           for variable_name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD ANDROID_RELEASE_KEY_ALIAS ANDROID_RELEASE_KEY_PASSWORD; do
-            if [ -z "${!variable_name:-}" ]; then
-              echo "缺少 GitHub Actions secret：$variable_name" >&2
-              exit 1
+            if [ -n "${!variable_name:-}" ]; then
+              configured_secret_count="$((configured_secret_count + 1))"
             fi
           done
 
-          keystore_path="$RUNNER_TEMP/android-release.keystore"
-          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          if [ "$configured_secret_count" -eq 4 ]; then
+            keystore_path="$RUNNER_TEMP/android-release.keystore"
+            printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
 
-          {
-            printf 'keystore_path=%s\n' "$keystore_path"
-            printf 'store_password=%s\n' "$ANDROID_RELEASE_STORE_PASSWORD"
-            printf 'key_alias=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
-            printf 'key_password=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
-          } >> "$GITHUB_OUTPUT"
+            {
+              printf 'keystore_path=%s\n' "$keystore_path"
+              printf 'store_password=%s\n' "$ANDROID_RELEASE_STORE_PASSWORD"
+              printf 'key_alias=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
+              printf 'key_password=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
+              printf 'signing_source=github-secrets\n'
+            } >> "$GITHUB_OUTPUT"
+
+            exit 0
+          fi
+
+          if [ "$configured_secret_count" -ne 0 ]; then
+            echo 'GitHub Actions release 签名 secrets 只配置了一部分；请补全 4 个变量，或全部删掉后使用仓库内置 keystore。' >&2
+            exit 1
+          fi
+
+          repo_keystore_path="$GITHUB_WORKSPACE/android-tavern/app/signing/release.keystore"
+          repo_signing_properties_path="$GITHUB_WORKSPACE/android-tavern/app/signing/release-signing.properties"
+
+          if [ -f "$repo_keystore_path" ] && [ -f "$repo_signing_properties_path" ]; then
+            printf 'signing_source=%s\n' 'repo' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo 'release 构建缺少签名配置；请配置 GitHub Actions secrets，或将 android-tavern/app/signing/release.keystore 与 android-tavern/app/signing/release-signing.properties 提交进仓库。' >&2
+          exit 1
 
       - name: Build Tavern APK
         id: package
@@ -288,6 +320,7 @@ jobs:
             echo '- Status: built'
             echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
             echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
+            echo '- Signing source: ${{ steps.signing.outputs.signing_source || 'none' }}'
             echo '- Release asset: ${{ steps.package.outputs.release_asset_name }}'
             echo '- SHA256: ${{ steps.package.outputs.apk_sha256 }}'
             echo '- Size bytes: ${{ steps.package.outputs.apk_size_bytes }}'

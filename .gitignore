@@ -1,23 +1,11 @@
 artifacts/
-.gradle/
-.kotlin/
-
-.DS_Store
-Thumbs.db
-.idea/
+.vs/
 .vscode/
-*.iml
-*.log
-*.jks
-*.keystore
 
 android-tavern/local.properties
 android-tavern/.gradle/
 android-tavern/.kotlin/
-android-tavern/.cxx/
-android-tavern/.externalNativeBuild/
 android-tavern/**/build/
-android-tavern/captures/
 
 android-tavern/app/src/main/assets/bootstrap/rootfs/*
 !android-tavern/app/src/main/assets/bootstrap/rootfs/.gitkeep

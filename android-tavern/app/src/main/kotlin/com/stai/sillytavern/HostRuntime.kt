@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 internal object BootConfig {
-    const val servicePort = 7888
+    const val defaultServicePort = 7888
     const val readinessProbeAttempts = 300
     const val readinessPath = "/"
     const val bootstrapAssetRoot = "bootstrap"
@@ -22,14 +22,27 @@ internal object BootConfig {
     const val notificationId = 1101
 
     val localServiceUrl: String
-        get() = "http://127.0.0.1:$servicePort"
+        get() = "http://127.0.0.1:$defaultServicePort"
+
+    fun servicePort(context: Context): Int {
+        return BootstrapHostConfigStore(context).servicePort
+    }
+
+    fun localServiceUrl(context: Context): String {
+        return "http://127.0.0.1:${servicePort(context)}"
+    }
 
     val readinessUrl: String
         get() = "$localServiceUrl$readinessPath"
+
+    fun readinessUrl(context: Context): String {
+        return "${localServiceUrl(context)}$readinessPath"
+    }
 }
 
 internal enum class StartupPhase {
     IDLE,
+    CONFIGURING,
     EXTRACTING,
     VALIDATING,
     STARTING_SERVER,
@@ -447,6 +460,118 @@ internal class ManagedProcess(
     }
 }
 
+internal object ServerProcessJanitor {
+    private data class ProcInfo(
+        val pid: Int,
+        val ppid: Int,
+        val name: String,
+        val cmdline: String
+    ) {
+        fun isBootstrapServerProcess(): Boolean {
+            return name == "libproot.so" ||
+                cmdline.contains("libproot.so") ||
+                cmdline.contains("server.js") ||
+                cmdline.contains("start-server.sh") ||
+                cmdline.contains("tavern-entrypoint.sh") ||
+                cmdline.contains("/tavern/server")
+        }
+    }
+
+    fun cleanupLingeringServerProcesses(): Int {
+        val processes = listOwnedProcesses()
+        if (processes.isEmpty()) {
+            return 0
+        }
+
+        val byParentPid = processes.groupBy { it.ppid }
+        val pidsToKill = linkedSetOf<Int>()
+
+        fun collectProcessTree(rootPid: Int) {
+            if (!pidsToKill.add(rootPid)) {
+                return
+            }
+
+            for (child in byParentPid[rootPid].orEmpty()) {
+                collectProcessTree(child.pid)
+            }
+        }
+
+        for (process in processes) {
+            if (process.isBootstrapServerProcess()) {
+                collectProcessTree(process.pid)
+            }
+        }
+
+        if (pidsToKill.isEmpty()) {
+            return 0
+        }
+
+        sendSignal(pidsToKill, "TERM")
+        Thread.sleep(150)
+
+        val remainingPids = pidsToKill.filter { pid -> File("/proc/$pid").exists() }
+        if (remainingPids.isNotEmpty()) {
+            sendSignal(remainingPids, "KILL")
+            Thread.sleep(100)
+        }
+
+        return pidsToKill.size
+    }
+
+    private fun listOwnedProcesses(): List<ProcInfo> {
+        val currentPid = android.os.Process.myPid()
+        val currentUid = android.os.Process.myUid().toString()
+        return File("/proc").listFiles().orEmpty().mapNotNull { procDir ->
+            val pid = procDir.name.toIntOrNull() ?: return@mapNotNull null
+            if (pid == currentPid) {
+                return@mapNotNull null
+            }
+
+            val statusLines = runCatching {
+                File(procDir, "status").readLines()
+            }.getOrNull() ?: return@mapNotNull null
+
+            val uidLine = statusLines.firstOrNull { line -> line.startsWith("Uid:") } ?: return@mapNotNull null
+            val uid = uidLine.substringAfter(':').trim().substringBefore('\t').substringBefore(' ')
+            if (uid != currentUid) {
+                return@mapNotNull null
+            }
+
+            val name = statusLines.firstOrNull { line -> line.startsWith("Name:") }
+                ?.substringAfter(':')
+                ?.trim()
+                .orEmpty()
+            val ppid = statusLines.firstOrNull { line -> line.startsWith("PPid:") }
+                ?.substringAfter(':')
+                ?.trim()
+                ?.toIntOrNull()
+                ?: 0
+            val cmdline = readCmdline(File(procDir, "cmdline"))
+
+            ProcInfo(pid = pid, ppid = ppid, name = name, cmdline = cmdline)
+        }
+    }
+
+    private fun readCmdline(cmdlineFile: File): String {
+        return runCatching {
+            cmdlineFile.readBytes()
+                .toString(Charsets.UTF_8)
+                .replace('\u0000', ' ')
+                .trim()
+        }.getOrDefault("")
+    }
+
+    private fun sendSignal(pids: Iterable<Int>, signal: String) {
+        for (pid in pids.toSet().sortedDescending()) {
+            runCatching {
+                ProcessBuilder("/system/bin/sh", "-c", "kill -$signal $pid")
+                    .start()
+                    .waitFor(1, TimeUnit.SECONDS)
+            }
+        }
+    }
+}
+
 internal class LinuxRuntimeLauncher(private val paths: HostPaths) {
     fun start(request: LaunchRequest): ManagedProcess {
         if (!request.scriptFile.exists()) {
@@ -514,7 +639,8 @@ internal class RootfsRuntimeProvisioner(
 
 internal class ServerController(
     private val launcher: LinuxRuntimeLauncher,
-    private val paths: HostPaths
+    private val paths: HostPaths,
+    private val servicePort: Int
 ) {
     fun start(): ManagedProcess {
         val request = LaunchRequest(
@@ -523,7 +649,7 @@ internal class ServerController(
             workingDirectory = paths.serverDir,
             environment = mapOf(
                 "APP_DATA_ROOT" to paths.serverDataDir.absolutePath,
-                "TAVERN_PORT" to BootConfig.servicePort.toString()
+                "TAVERN_PORT" to servicePort.toString()
             )
         )
         return launcher.start(request)
@@ -539,6 +665,10 @@ internal object HealthProbe {
             delay(1000)
         }
         return false
+    }
+
+    fun isReady(targetUrl: String): Boolean {
+        return checkOnce(targetUrl)
     }
 
     private fun checkOnce(targetUrl: String): Boolean {

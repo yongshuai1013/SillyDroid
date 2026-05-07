@@ -18,6 +18,12 @@
         android:usesCleartextTraffic="true">
 
         <activity
+            android:name=".BootstrapSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SillyTavernAndroidHost.Settings"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask">

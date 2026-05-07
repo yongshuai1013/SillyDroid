@@ -10,11 +10,13 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,15 +24,24 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class StartupCoordinatorService : Service() {
     companion object {
+        private const val logTag = "StartupCoordinator"
         private const val ACTION_START = "com.stai.sillytavern.action.START"
         private const val ACTION_RETRY = "com.stai.sillytavern.action.RETRY"
+        private const val ACTION_STOP_FOR_SETTINGS = "com.stai.sillytavern.action.STOP_FOR_SETTINGS"
 
         fun createStartIntent(context: Context, retry: Boolean = false): Intent {
             return Intent(context, StartupCoordinatorService::class.java).apply {
                 action = if (retry) ACTION_RETRY else ACTION_START
+            }
+        }
+
+        fun createStopForSettingsIntent(context: Context): Intent {
+            return Intent(context, StartupCoordinatorService::class.java).apply {
+                action = ACTION_STOP_FOR_SETTINGS
             }
         }
     }
@@ -41,6 +52,8 @@ class StartupCoordinatorService : Service() {
     private var serverProcess: ManagedProcess? = null
     private val startupLogFile: File
         get() = File(filesDir, "android-tavern/logs/startup.log")
+    private val serverLogFile: File
+        get() = File(filesDir, "android-tavern/logs/sillytavern-server.log")
 
     override fun onCreate() {
         super.onCreate()
@@ -50,6 +63,13 @@ class StartupCoordinatorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_FOR_SETTINGS) {
+            serviceScope.launch {
+                interruptForSettings()
+            }
+            return START_NOT_STICKY
+        }
+
         val retry = intent?.action == ACTION_RETRY
         val notification = buildNotification(StartupRuntimeStore.state.value)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -90,11 +110,10 @@ class StartupCoordinatorService : Service() {
         }
 
         bootstrapJob?.cancel()
-        if (forceRestart) {
-            stopManagedProcesses()
-        }
-
         bootstrapJob = serviceScope.launch {
+            if (forceRestart) {
+                stopManagedProcesses()
+            }
             runBootstrap()
         }
     }
@@ -103,6 +122,22 @@ class StartupCoordinatorService : Service() {
         resetStartupLog()
         try {
             val paths = HostPaths.from(applicationContext)
+            val servicePort = BootConfig.servicePort(applicationContext)
+            val localUrl = BootConfig.localServiceUrl(applicationContext)
+            val readinessUrl = BootConfig.readinessUrl(applicationContext)
+
+            if (HealthProbe.isReady(readinessUrl)) {
+                appendStartupLog("Detected existing local Tavern server at $localUrl, reusing current instance.")
+                updateState(
+                    StartupState(
+                        phase = StartupPhase.READY,
+                        message = "已连接到现有本地 Tavern 服务，正在打开 WebView。",
+                        localUrl = localUrl
+                    )
+                )
+                return
+            }
+
             updateState(StartupState(StartupPhase.EXTRACTING, "正在解包 Tavern bootstrap 资产。"))
             AssetExtractor(applicationContext).extractBootstrap(paths)
 
@@ -115,10 +150,11 @@ class StartupCoordinatorService : Service() {
             RootfsRuntimeProvisioner(launcher, paths).ensure()
 
             updateState(StartupState(StartupPhase.STARTING_SERVER, "正在拉起 SillyTavern。"))
-            serverProcess = ServerController(launcher, paths).start()
+            stopManagedProcesses()
+            serverProcess = ServerController(launcher, paths, servicePort).start()
 
             updateState(StartupState(StartupPhase.WAITING_READY, "正在等待本地 Tavern 服务就绪。"))
-            if (!HealthProbe.awaitReady(BootConfig.readinessUrl)) {
+            if (!HealthProbe.awaitReady(readinessUrl)) {
                 throw BootstrapException("本地 Tavern 服务在等待窗口内未就绪。")
             }
 
@@ -126,10 +162,12 @@ class StartupCoordinatorService : Service() {
                 StartupState(
                     phase = StartupPhase.READY,
                     message = "本地 Tavern 服务已就绪，正在打开 WebView。",
-                    localUrl = BootConfig.localServiceUrl
+                    localUrl = localUrl
                 )
             )
             startServerMonitor()
+        } catch (_: CancellationException) {
+            appendStartupLog("Bootstrap cancelled.")
         } catch (exception: BootstrapException) {
             appendStartupLog("BootstrapException: ${exception.message ?: exception.javaClass.simpleName}")
             appendStartupLog(formatThrowable(exception))
@@ -150,6 +188,28 @@ class StartupCoordinatorService : Service() {
                     details = exception.message ?: exception.javaClass.simpleName
                 )
             )
+        }
+    }
+
+    private suspend fun interruptForSettings() {
+        bootstrapJob?.cancel(CancellationException("Interrupted for bootstrap settings."))
+        bootstrapJob = null
+        stopManagedProcesses()
+        withContext(Dispatchers.Main.immediate) {
+            updateState(
+                StartupState(
+                    phase = StartupPhase.CONFIGURING,
+                    message = "已暂停启动，请调整 Tavern 配置。",
+                    localUrl = BootConfig.localServiceUrl(applicationContext)
+                )
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            stopSelf()
         }
     }
 
@@ -178,6 +238,45 @@ class StartupCoordinatorService : Service() {
     private fun appendStartupLog(message: String) {
         startupLogFile.parentFile?.mkdirs()
         startupLogFile.appendText("${System.currentTimeMillis()} $message\n")
+    }
+
+    private fun readServerLogExcerpt(maxLines: Int = 24, maxChars: Int = 1800): String {
+        val excerpt = runCatching {
+            if (!serverLogFile.exists()) {
+                return@runCatching ""
+            }
+
+            serverLogFile.readLines()
+                .takeLast(maxLines)
+                .joinToString("\n") { it.trimEnd() }
+                .trim()
+        }.getOrDefault("")
+
+        if (excerpt.length <= maxChars) {
+            return excerpt
+        }
+
+        return excerpt.takeLast(maxChars).trimStart()
+    }
+
+    private fun buildServerExitDetails(exitCode: Int): String {
+        val excerpt = readServerLogExcerpt()
+        if (excerpt.isBlank()) {
+            return "SillyTavern 进程退出码：$exitCode"
+        }
+
+        return buildString {
+            append("SillyTavern 进程退出码：")
+            append(exitCode)
+            append("\n\n最近服务日志：\n")
+            append(excerpt)
+        }
+    }
+
+    private fun recordServerExitDiagnostics(details: String) {
+        val compactDetails = details.replace('\n', ' ').trim()
+        appendStartupLog("Server diagnostics: $compactDetails")
+        Log.e(logTag, details)
     }
 
     private fun formatThrowable(throwable: Throwable): String {
@@ -229,13 +328,15 @@ class StartupCoordinatorService : Service() {
                 return@launch
             }
 
+            val details = buildServerExitDetails(exitCode)
             appendStartupLog("Server process exited unexpectedly. exitCode=$exitCode")
+            recordServerExitDiagnostics(details)
             serverProcess = null
             updateState(
                 StartupState(
                     phase = StartupPhase.ERROR,
                     message = "本地 Tavern 服务已退出。",
-                    details = "SillyTavern 进程退出码：$exitCode"
+                    details = details
                 )
             )
         }
@@ -246,5 +347,9 @@ class StartupCoordinatorService : Service() {
         serverMonitorJob = null
         serverProcess?.stop()
         serverProcess = null
+        val cleanedProcessCount = ServerProcessJanitor.cleanupLingeringServerProcesses()
+        if (cleanedProcessCount > 0) {
+            appendStartupLog("Cleaned $cleanedProcessCount lingering server process(es).")
+        }
     }
 }
