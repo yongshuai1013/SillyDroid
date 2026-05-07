@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SillyTavern</string>
+    <string name="bootstrap_title">本地服务启动中</string>
+    <string name="bootstrap_idle">正在准备 SillyTavern Android 宿主环境。</string>
+    <string name="bootstrap_retry">重新尝试</string>
+    <string name="bootstrap_notification_title">SillyTavern Android 宿主</string>
+    <string name="system_notification_channel_title">SillyTavern 系统通知</string>
+    <string name="system_notification_channel_description">用于展示 WebView 页面发起的业务系统通知。</string>
+    <string name="download_status_preparing">正在准备下载“%1$s”。</string>
+    <string name="download_status_saving">正在保存“%1$s”。</string>
+    <string name="download_status_pending">正在等待下载“%1$s”。</string>
+    <string name="download_started">已开始下载“%1$s”。</string>
+    <string name="download_saved">已保存“%1$s”到下载目录。</string>
+    <string name="download_failed">“%1$s”下载失败：%2$s</string>
+    <string name="download_failed_unknown">系统未返回失败详情。</string>
+    <string name="download_failed_empty_payload">导出内容为空。</string>
+</resources>

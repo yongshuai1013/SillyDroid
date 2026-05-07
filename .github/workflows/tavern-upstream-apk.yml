@@ -1,0 +1,366 @@
+name: tavern-upstream-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      tavern_tag:
+        description: 指定上游 SillyTavern tag；留空时自动取最新 GitHub Release tag
+        required: false
+        default: ""
+        type: string
+      build_type:
+        description: APK 构建类型
+        required: false
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
+      force_rebuild:
+        description: 即使当前仓库已存在同 tag 产物也强制重打
+        required: false
+        default: false
+        type: boolean
+      publish_release:
+        description: 是否上传到当前仓库 GitHub Release
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tavern-upstream-apk
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tavern_tag: ${{ steps.plan.outputs.tavern_tag }}
+      safe_tag: ${{ steps.plan.outputs.safe_tag }}
+      build_type: ${{ steps.plan.outputs.build_type }}
+      force_rebuild: ${{ steps.plan.outputs.force_rebuild }}
+      publish_release: ${{ steps.plan.outputs.publish_release }}
+      should_build: ${{ steps.plan.outputs.should_build }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      release_title: ${{ steps.plan.outputs.release_title }}
+      release_prerelease: ${{ steps.plan.outputs.release_prerelease }}
+      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      version_name: ${{ steps.plan.outputs.version_name }}
+      version_code: ${{ steps.plan.outputs.version_code }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve upstream release and build plan
+        id: plan
+        env:
+          UPSTREAM_REPO: SillyTavern/SillyTavern
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tavern_tag || '' }}
+          REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'debug' }}
+          FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || 'false' }}
+          PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'true' }}
+        run: |
+          set -euo pipefail
+
+          build_type="$REQUESTED_BUILD_TYPE"
+          force_rebuild="$FORCE_REBUILD"
+          publish_release="$PUBLISH_RELEASE"
+          tavern_tag="$REQUESTED_TAG"
+
+          case "$build_type" in
+            debug|release)
+              ;;
+            *)
+              echo "Unsupported build_type: $build_type" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$force_rebuild" in
+            true|false)
+              ;;
+            *)
+              echo "Unsupported force_rebuild: $force_rebuild" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$publish_release" in
+            true|false)
+              ;;
+            *)
+              echo "Unsupported publish_release: $publish_release" >&2
+              exit 1
+              ;;
+          esac
+
+          # 定时任务默认直接跟踪上游最新 GitHub Release；手动触发时允许显式指定任意 tag 重打。
+          if [ -z "$tavern_tag" ]; then
+            tavern_tag="$(gh api "/repos/$UPSTREAM_REPO/releases/latest" --jq '.tag_name')"
+          fi
+
+          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'null' ]; then
+            echo '无法解析上游 SillyTavern release tag。' >&2
+            exit 1
+          fi
+
+          normalized_tag="${tavern_tag#refs/tags/}"
+          safe_tag="$(printf '%s' "$normalized_tag" | sed 's#[^0-9A-Za-z._-]#-#g')"
+          artifact_name="sillytavern-android-${safe_tag}-${build_type}"
+          release_tag="sillytavern-${safe_tag}-${build_type}"
+          release_title="SillyTavern ${normalized_tag} Android ${build_type}"
+          release_prerelease='true'
+          if [ "$build_type" = 'release' ]; then
+            release_prerelease='false'
+          fi
+
+          should_build='true'
+          if [ "$publish_release" = 'true' ] && [ "$force_rebuild" != 'true' ]; then
+            if gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              if gh api "/repos/${{ github.repository }}/releases/tags/$release_tag" --jq '.assets[].name' 2>/dev/null | grep -Fx "${artifact_name}.apk" > /dev/null 2>&1; then
+                should_build='false'
+              fi
+            fi
+          fi
+
+          version_name="$normalized_tag"
+          # Android versionCode 需要是正整数；这里直接用当前 UTC epoch 秒，保证每次构建单调递增。
+          version_code="$(date -u +%s)"
+
+          {
+            printf 'tavern_tag=%s\n' "$normalized_tag"
+            printf 'safe_tag=%s\n' "$safe_tag"
+            printf 'build_type=%s\n' "$build_type"
+            printf 'force_rebuild=%s\n' "$force_rebuild"
+            printf 'publish_release=%s\n' "$publish_release"
+            printf 'should_build=%s\n' "$should_build"
+            printf 'release_tag=%s\n' "$release_tag"
+            printf 'release_title=%s\n' "$release_title"
+            printf 'release_prerelease=%s\n' "$release_prerelease"
+            printf 'artifact_name=%s\n' "$artifact_name"
+            printf 'version_name=%s\n' "$version_name"
+            printf 'version_code=%s\n' "$version_code"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Append skip summary
+        if: steps.plan.outputs.should_build != 'true'
+        run: |
+          {
+            echo '### Tavern upstream APK'
+            echo
+            echo '- Status: skipped'
+            echo '- Reason: 当前仓库已存在同 upstream tag 与 build type 的 APK release 资产'
+            echo '- Upstream tag: ${{ steps.plan.outputs.tavern_tag }}'
+            echo '- Build type: ${{ steps.plan.outputs.build_type }}'
+            echo '- Release tag: ${{ steps.plan.outputs.release_tag }}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      release_asset_name: ${{ steps.package.outputs.release_asset_name }}
+      apk_sha256: ${{ steps.package.outputs.apk_sha256 }}
+      apk_size_bytes: ${{ steps.package.outputs.apk_size_bytes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            android-tavern
+            gradle
+            gradlew
+            gradlew.bat
+            scripts
+
+      - name: Restore Tavern Android build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stai-android-toolchain
+            ~/.cache/stai-android-rootfs
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.npm
+          key: tavern-upstream-apk-${{ runner.os }}-${{ hashFiles('scripts/*.sh', 'android-tavern/build.gradle.kts', 'android-tavern/settings.gradle.kts', 'android-tavern/gradle.properties', 'android-tavern/app/build.gradle.kts', 'gradle/wrapper/*', 'gradlew') }}
+          restore-keys: |
+            tavern-upstream-apk-${{ runner.os }}-
+
+      - name: Install Android build prerequisites
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip binutils xz-utils
+
+      - name: Prepare release signing inputs
+        id: signing
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ '${{ needs.resolve.outputs.build_type }}' != 'release' ]; then
+            exit 0
+          fi
+
+          for variable_name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD ANDROID_RELEASE_KEY_ALIAS ANDROID_RELEASE_KEY_PASSWORD; do
+            if [ -z "${!variable_name:-}" ]; then
+              echo "缺少 GitHub Actions secret：$variable_name" >&2
+              exit 1
+            fi
+          done
+
+          keystore_path="$RUNNER_TEMP/android-release.keystore"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+
+          {
+            printf 'keystore_path=%s\n' "$keystore_path"
+            printf 'store_password=%s\n' "$ANDROID_RELEASE_STORE_PASSWORD"
+            printf 'key_alias=%s\n' "$ANDROID_RELEASE_KEY_ALIAS"
+            printf 'key_password=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build Tavern APK
+        id: package
+        run: |
+          set -euo pipefail
+
+          export STAI_TAVERN_ANDROID_BUILD_ROOT="$RUNNER_TEMP/stai-tavern-android-build"
+          export STAI_ANDROID_VERSION_NAME='${{ needs.resolve.outputs.version_name }}'
+          export STAI_ANDROID_VERSION_CODE='${{ needs.resolve.outputs.version_code }}'
+
+          if [ '${{ needs.resolve.outputs.build_type }}' = 'release' ]; then
+            export STAI_ANDROID_RELEASE_KEYSTORE_PATH='${{ steps.signing.outputs.keystore_path }}'
+            export STAI_ANDROID_RELEASE_KEYSTORE_PASSWORD='${{ steps.signing.outputs.store_password }}'
+            export STAI_ANDROID_RELEASE_KEY_ALIAS='${{ steps.signing.outputs.key_alias }}'
+            export STAI_ANDROID_RELEASE_KEY_PASSWORD='${{ steps.signing.outputs.key_password }}'
+          fi
+
+          bash ./scripts/build-tavern-android-apk.sh \
+            --runtime-rid linux-arm64 \
+            --build-type '${{ needs.resolve.outputs.build_type }}' \
+            --tag '${{ needs.resolve.outputs.tavern_tag }}'
+
+          source_apk_path="$GITHUB_WORKSPACE/artifacts/validation/android-tavern/app-${{ needs.resolve.outputs.build_type }}.apk"
+          release_asset_dir="$GITHUB_WORKSPACE/artifacts/release"
+          release_asset_name='${{ needs.resolve.outputs.artifact_name }}.apk'
+          release_asset_path="$release_asset_dir/$release_asset_name"
+          release_sha256_path="$release_asset_path.sha256"
+
+          mkdir -p "$release_asset_dir"
+          cp "$source_apk_path" "$release_asset_path"
+
+          apk_sha256="$(sha256sum "$release_asset_path" | awk '{print $1}')"
+          apk_size_bytes="$(stat -c '%s' "$release_asset_path")"
+          printf '%s\n' "$apk_sha256" > "$release_sha256_path"
+
+          {
+            printf 'release_asset_name=%s\n' "$release_asset_name"
+            printf 'apk_sha256=%s\n' "$apk_sha256"
+            printf 'apk_size_bytes=%s\n' "$apk_size_bytes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}
+          path: |
+            artifacts/release/*.apk
+            artifacts/release/*.sha256
+          if-no-files-found: error
+
+      - name: Append build summary
+        run: |
+          {
+            echo '### Tavern upstream APK'
+            echo
+            echo '- Status: built'
+            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
+            echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
+            echo '- Release asset: ${{ steps.package.outputs.release_asset_name }}'
+            echo '- SHA256: ${{ steps.package.outputs.apk_sha256 }}'
+            echo '- Size bytes: ${{ steps.package.outputs.apk_size_bytes }}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs:
+      - resolve
+      - build
+    if: needs.resolve.outputs.should_build == 'true' && needs.resolve.outputs.publish_release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}
+          path: artifacts/release
+
+      - name: Ensure GitHub Release exists
+        run: |
+          set -euo pipefail
+
+          release_tag='${{ needs.resolve.outputs.release_tag }}'
+          release_title='${{ needs.resolve.outputs.release_title }}'
+          release_prerelease='${{ needs.resolve.outputs.release_prerelease }}'
+          release_notes_file="$(mktemp)"
+
+          {
+            echo '## SillyTavern Android APK'
+            echo
+            echo '- Upstream repo: SillyTavern/SillyTavern'
+            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
+            echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
+            echo '- APK asset: ${{ needs.build.outputs.release_asset_name }}'
+            echo '- SHA256: ${{ needs.build.outputs.apk_sha256 }}'
+            echo '- Size bytes: ${{ needs.build.outputs.apk_size_bytes }}'
+            echo '- Workflow: tavern-upstream-apk'
+          } > "$release_notes_file"
+
+          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            if [ "$release_prerelease" = 'true' ]; then
+              gh release create "$release_tag" \
+                --repo '${{ github.repository }}' \
+                --target '${{ github.sha }}' \
+                --title "$release_title" \
+                --notes-file "$release_notes_file" \
+                --prerelease
+            else
+              gh release create "$release_tag" \
+                --repo '${{ github.repository }}' \
+                --target '${{ github.sha }}' \
+                --title "$release_title" \
+                --notes-file "$release_notes_file"
+            fi
+          fi
+
+          gh release edit "$release_tag" \
+            --repo '${{ github.repository }}' \
+            --title "$release_title" \
+            --notes-file "$release_notes_file" > /dev/null
+
+          release_id="$(gh api "/repos/${{ github.repository }}/releases/tags/$release_tag" --jq '.id')"
+          gh api --method PATCH \
+            "/repos/${{ github.repository }}/releases/$release_id" \
+            -f prerelease="$release_prerelease" > /dev/null
+
+      - name: Upload release assets
+        run: |
+          set -euo pipefail
+
+          gh release upload '${{ needs.resolve.outputs.release_tag }}' \
+            artifacts/release/* \
+            --repo '${{ github.repository }}' \
+            --clobber
