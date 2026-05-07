@@ -296,6 +296,8 @@ class MainActivity : AppCompatActivity() {
             private var downViewX = 0f
             private var downViewY = 0f
             private var dragging = false
+            private var longPressTriggered = false
+            private var longPressRunnable: Runnable? = null
 
             override fun onTouch(view: View, event: MotionEvent): Boolean {
                 when (event.actionMasked) {
@@ -306,6 +308,16 @@ class MainActivity : AppCompatActivity() {
                         downViewX = view.x
                         downViewY = view.y
                         dragging = false
+                        longPressTriggered = false
+                        longPressRunnable?.let(view::removeCallbacks)
+                        longPressRunnable = Runnable {
+                            if (!dragging && !longPressTriggered) {
+                                longPressTriggered = true
+                                openBootstrapSettings()
+                            }
+                        }.also { runnable ->
+                            view.postDelayed(runnable, ViewConfiguration.getLongPressTimeout().toLong())
+                        }
                         view.parent?.requestDisallowInterceptTouchEvent(true)
                         return true
                     }
@@ -315,6 +327,7 @@ class MainActivity : AppCompatActivity() {
                         val deltaY = event.rawY - downRawY
                         if (!dragging && (abs(deltaX) > floatingLogsBubbleTouchSlop || abs(deltaY) > floatingLogsBubbleTouchSlop)) {
                             dragging = true
+                            longPressRunnable?.let(view::removeCallbacks)
                         }
                         if (dragging) {
                             moveFloatingLogsBubbleTo(downViewX + deltaX, downViewY + deltaY)
@@ -326,10 +339,12 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     MotionEvent.ACTION_UP -> {
+                        longPressRunnable?.let(view::removeCallbacks)
+                        longPressRunnable = null
                         view.parent?.requestDisallowInterceptTouchEvent(false)
-                        if (!dragging) {
+                        if (!dragging && !longPressTriggered) {
                             view.performClick()
-                        } else {
+                        } else if (dragging) {
                             floatingLogsBubbleDockSide = resolveFloatingLogsBubbleDockSide(view.x + view.width / 2f)
                             persistFloatingLogsBubblePosition()
                             alignFloatingLogsBubbleToDockState(animated = true)
@@ -338,6 +353,8 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     MotionEvent.ACTION_CANCEL -> {
+                        longPressRunnable?.let(view::removeCallbacks)
+                        longPressRunnable = null
                         view.parent?.requestDisallowInterceptTouchEvent(false)
                         if (dragging) {
                             floatingLogsBubbleDockSide = resolveFloatingLogsBubbleDockSide(view.x + view.width / 2f)
@@ -1473,6 +1490,8 @@ class MainActivity : AppCompatActivity() {
         }
         bootstrapProgress.isVisible = !state.canRetry && state.phase != StartupPhase.CONFIGURING
         bootstrapProgressLabel.isVisible = bootstrapProgress.isVisible
+        bootstrapSettingsButton.isVisible = !state.isReady
+        bootstrapSettingsButton.isEnabled = !state.isReady && !isOpeningBootstrapSettings
         bootstrapProgress.max = 100
         val progressPercent = state.progressPercent.coerceIn(0, 100)
         bootstrapProgress.isIndeterminate = progressPercent <= 0
