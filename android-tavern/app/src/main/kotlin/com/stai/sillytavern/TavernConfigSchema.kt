@@ -92,7 +92,7 @@ internal object TavernConfigSchema {
                 booleanField("protocol.ipv4", "启用 IPv4", "至少要保留一个网络协议可用。", true),
                 booleanField("protocol.ipv6", "启用 IPv6", "如果网络环境稳定支持 IPv6，可以开启。", false),
                 booleanField("dnsPreferIPv6", "优先使用 IPv6 DNS", "在 IPv6 网络质量足够好时再开启。", false),
-                booleanField("browserLaunch.enabled", "启用浏览器自动打开", "Android 宿主一般会关闭，由宿主 WebView 统一接管。", true),
+                booleanField("browserLaunch.enabled", "启用浏览器自动打开", "Android 宿主一般会关闭，由宿主 WebView 统一接管。", false),
                 textField("browserLaunch.hostname", "浏览器主机名", "上游配置项，默认 auto。Android 宿主通常无需修改。", "auto", visibleWhenAllEnabled = listOf("browserLaunch.enabled")),
                 integerField("browserLaunch.port", "浏览器端口覆盖", "填 -1 表示跟随服务端口。", -1, visibleWhenAllEnabled = listOf("browserLaunch.enabled")),
                 booleanField("browserLaunch.avoidLocalhost", "避免使用 localhost", "当设备 hosts 中没有 localhost 时可以开启。", false, visibleWhenAllEnabled = listOf("browserLaunch.enabled")),
@@ -204,7 +204,7 @@ internal object TavernConfigSchema {
                 textField("extensions.models.embedding", "向量嵌入模型", "HuggingFace 模型 ID。", "Cohee/jina-embeddings-v2-base-en", visibleWhenAllEnabled = listOf("extensions.enabled", "extensions.models.autoDownload")),
                 textField("extensions.models.speechToText", "语音转文本模型", "HuggingFace 模型 ID。", "Xenova/whisper-small", visibleWhenAllEnabled = listOf("extensions.enabled", "extensions.models.autoDownload")),
                 textField("extensions.models.textToSpeech", "文本转语音模型", "HuggingFace 模型 ID。", "Xenova/speecht5_tts", visibleWhenAllEnabled = listOf("extensions.enabled", "extensions.models.autoDownload")),
-                textField("git.backend", "Git 后端", "可填 auto、system 或 builtin。", "auto"),
+                textField("git.backend", "Git 后端", "可填 auto、system 或 builtin。Android 宿主默认建议 builtin，避免依赖系统 git。", "builtin"),
                 booleanField("enableDownloadableTokenizers", "允许下载额外 tokenizer", "关闭后会回退到本地可用 tokenizer。", true),
                 booleanField("enableServerPlugins", "启用服务端插件", "需要你确认插件来源可信。", false),
                 booleanField("enableServerPluginsAutoUpdate", "自动更新服务端插件", "如果重视可重复性，建议关闭。", true, visibleWhenAllEnabled = listOf("enableServerPlugins"))

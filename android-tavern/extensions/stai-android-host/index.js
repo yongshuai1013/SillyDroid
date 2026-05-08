@@ -7,6 +7,7 @@ const menuButtonId = 'stai_android_host_menu_button';
 const popupTitle = 'Android Host';
 
 let slashCommandsRegistered = false;
+let bootstrapScheduled = false;
 
 function getBridge() {
     const bridge = globalThis[bridgeName];
@@ -260,7 +261,32 @@ function registerSlashCommands() {
     }));
 }
 
-export async function activate() {
+function bootstrapHostExtensionUi() {
     registerSlashCommands();
     addMenuButton();
+}
+
+function scheduleHostExtensionBootstrap() {
+    if (bootstrapScheduled) {
+        return;
+    }
+
+    bootstrapScheduled = true;
+    const run = () => {
+        bootstrapHostExtensionUi();
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, { once: true });
+        window.setTimeout(run, 500);
+        return;
+    }
+
+    window.setTimeout(run, 0);
+}
+
+scheduleHostExtensionBootstrap();
+
+export async function activate() {
+    bootstrapHostExtensionUi();
 }

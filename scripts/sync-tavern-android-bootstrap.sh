@@ -50,6 +50,51 @@ print(tag_name)
 PY
 }
 
+patch_android_default_config() {
+    local config_path="$1"
+
+    if [[ ! -f "$config_path" ]] || ! command -v python3 >/dev/null 2>&1; then
+        return
+    fi
+
+    python3 - "$config_path" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+text = config_path.read_text(encoding="utf-8")
+lines = text.splitlines(keepends=True)
+section = None
+
+for index, line in enumerate(lines):
+    stripped = line.strip()
+
+    if re.fullmatch(r'browserLaunch:\s*', stripped):
+        section = 'browserLaunch'
+        continue
+
+    if re.fullmatch(r'git:\s*', stripped):
+        section = 'git'
+        continue
+
+    if section == 'browserLaunch' and re.match(r'enabled:\s*(true|false)\b', stripped):
+        lines[index] = re.sub(r'(enabled:\s*)(true|false)\b', r'\1false', line, count=1)
+        section = None
+        continue
+
+    if section == 'git' and re.match(r'backend:\s*\S+', stripped):
+        lines[index] = re.sub(r'(backend:\s*)\S+', r'\1builtin', line, count=1)
+        section = None
+        continue
+
+    if stripped and not line.startswith((' ', '\t', '#')):
+        section = None
+
+config_path.write_text(''.join(lines), encoding="utf-8")
+PY
+}
+
 source_android_build_common() {
     local common_script="$workspace_root/scripts/android-build-common.sh"
 
@@ -190,6 +235,8 @@ rm -rf "$payload_root/data" "$payload_root/backups"
 if [[ -d "$server_overlay_root" ]]; then
     cp -R "$server_overlay_root/." "$payload_root/"
 fi
+
+patch_android_default_config "$payload_root/default/config.yaml"
 
 if [[ -d "$extensions_source_root" ]]; then
     mkdir -p "$payload_root/bundled-extensions"

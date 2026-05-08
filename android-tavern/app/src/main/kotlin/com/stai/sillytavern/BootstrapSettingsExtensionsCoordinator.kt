@@ -1283,9 +1283,11 @@ internal class BootstrapSettingsExtensionsCoordinator(
         runtimeProvisioner.ensure()
 
         val maintenanceRoot = File(paths.serverDataDir, ".stai-maintenance")
+        val serverMaintenanceRoot = File(paths.bootstrapRoot, "server/.stai-maintenance")
         maintenanceRoot.mkdirs()
+        serverMaintenanceRoot.mkdirs()
 
-        val commandScript = File(maintenanceRoot, commandFileName)
+        val commandScript = File(serverMaintenanceRoot, commandFileName)
         val launchScript = File(maintenanceRoot, "extension-command.sh")
         commandScript.writeText(commandContent)
         launchScript.writeText(extensionRuntimeScript())
@@ -1300,7 +1302,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             workingDirectory = paths.bootstrapRoot,
             environment = environment + mapOf(
                 "APP_DATA_ROOT" to paths.serverDataDir.absolutePath,
-                "COMMAND_JS" to "/tavern/data/.stai-maintenance/$commandFileName",
+                "COMMAND_JS" to "/tavern/server/.stai-maintenance/$commandFileName",
                 "STAI_EXTENSION_PROGRESS_FILE" to guestProgressFile
             )
         )
@@ -1344,6 +1346,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             throw exception
         } finally {
             progressFile.delete()
+            commandScript.delete()
         }
         return logPath
     }

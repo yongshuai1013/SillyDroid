@@ -237,7 +237,7 @@ jobs:
           fi
 
           should_build='true'
-          if [ "$publish_release" = 'true' ] && [ "$force_rebuild" != 'true' ] && [ "$runtime_changed" != 'true' ] && [ "$payload_changed" != 'true' ]; then
+          if [ '${{ github.event_name }}' != 'push' ] && [ "$publish_release" = 'true' ] && [ "$force_rebuild" != 'true' ] && [ "$runtime_changed" != 'true' ] && [ "$payload_changed" != 'true' ]; then
             if gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
               if gh api "/repos/${{ github.repository }}/releases/tags/$release_tag" --jq '.assets[].name' 2>/dev/null | grep -Fx "${artifact_name}.apk" > /dev/null 2>&1; then
                 should_build='false'
