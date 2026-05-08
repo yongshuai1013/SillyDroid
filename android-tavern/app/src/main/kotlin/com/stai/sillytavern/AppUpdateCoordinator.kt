@@ -55,6 +55,13 @@ internal class AppUpdateCoordinator(
         val localUri: String?
     )
 
+    private data class AboutVersionInfo(
+        val apkVersionName: String,
+        val apkVersionCode: String,
+        val runtimeVersion: String,
+        val serverPayloadVersion: String
+    )
+
     companion object {
         private const val githubApiBaseUrl = "https://api.github.com"
         private const val metadataAssetSuffix = ".update.json"
@@ -423,10 +430,14 @@ internal class AppUpdateCoordinator(
         }
 
         aboutUi?.let { ui ->
+            val aboutVersionInfo = resolveAboutVersionInfo()
             ui.versionView.text = activity.getString(
                 R.string.bootstrap_settings_about_version_value,
-                resolveCurrentVersionName(),
+                aboutVersionInfo.apkVersionName,
+                aboutVersionInfo.apkVersionCode,
                 BuildConfig.STAI_HOST_VERSION,
+                aboutVersionInfo.runtimeVersion,
+                aboutVersionInfo.serverPayloadVersion,
                 BuildConfig.BUILD_TYPE.uppercase(Locale.US)
             )
 
@@ -571,14 +582,93 @@ internal class AppUpdateCoordinator(
         return null
     }
 
+    private fun resolveAboutVersionInfo(): AboutVersionInfo {
+        val packageInfo = resolveCurrentPackageInfo()
+        val apkVersionName = packageInfo.versionName.orEmpty().trim().ifBlank {
+            activity.getString(R.string.bootstrap_settings_about_version_unknown)
+        }
+        val apkVersionCode = packageInfo.longVersionCode.toString()
+
+        return AboutVersionInfo(
+            apkVersionName = apkVersionName,
+            apkVersionCode = apkVersionCode,
+            runtimeVersion = resolveRuntimeVersionLabel(),
+            serverPayloadVersion = resolveServerPayloadVersionLabel()
+        )
+    }
+
+    private fun resolveRuntimeVersionLabel(): String {
+        val manifest = readJsonAssetOrNull("bootstrap/rootfs/rootfs-manifest.json")
+            ?: return activity.getString(R.string.bootstrap_settings_about_version_unknown)
+
+        val directVersion = manifest.optString("runtimeVersion").trim()
+        if (directVersion.isNotBlank()) {
+            return directVersion
+        }
+
+        val ubuntuBaseVersion = manifest.optString("ubuntuBaseVersion").trim().ifBlank {
+            extractFirstGroup(
+                source = manifest.optString("ubuntuBaseUrl"),
+                pattern = """ubuntu-base-([0-9][0-9.]+)-base-arm64\.tar\.gz"""
+            )
+        }
+        val prootVersion = manifest.optString("prootVersion").trim().ifBlank {
+            extractFirstGroup(
+                source = manifest.optString("prootPackageUrl"),
+                pattern = """proot_([^_]+)_aarch64\.deb"""
+            )
+        }
+
+        return when {
+            ubuntuBaseVersion.isNotBlank() && prootVersion.isNotBlank() -> "$ubuntuBaseVersion+proot.$prootVersion"
+            ubuntuBaseVersion.isNotBlank() -> ubuntuBaseVersion
+            prootVersion.isNotBlank() -> "proot.$prootVersion"
+            else -> activity.getString(R.string.bootstrap_settings_about_version_unknown)
+        }
+    }
+
+    private fun resolveServerPayloadVersionLabel(): String {
+        val manifest = readJsonAssetOrNull("bootstrap/server/bootstrap-manifest.json")
+            ?: return activity.getString(R.string.bootstrap_settings_about_version_unknown)
+
+        val directVersion = manifest.optString("payloadVersion").trim()
+        if (directVersion.isNotBlank()) {
+            return directVersion
+        }
+
+        val tag = manifest.optString("tag").trim()
+        val nodeVersion = manifest.optString("nodeVersion").trim()
+        return when {
+            tag.isNotBlank() && nodeVersion.isNotBlank() -> "$tag+node.$nodeVersion"
+            tag.isNotBlank() -> tag
+            nodeVersion.isNotBlank() -> "node.$nodeVersion"
+            else -> activity.getString(R.string.bootstrap_settings_about_version_unknown)
+        }
+    }
+
+    private fun readJsonAssetOrNull(assetPath: String): JSONObject? {
+        return runCatching {
+            activity.assets.open(assetPath).bufferedReader().use { reader ->
+                JSONObject(reader.readText())
+            }
+        }.getOrNull()
+    }
+
+    private fun extractFirstGroup(source: String, pattern: String): String {
+        return Regex(pattern).find(source)?.groupValues?.getOrNull(1).orEmpty().trim()
+    }
+
     @Suppress("DEPRECATION")
-    private fun resolveCurrentVersionName(): String {
-        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private fun resolveCurrentPackageInfo(): android.content.pm.PackageInfo {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             activity.packageManager.getPackageInfo(activity.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
         } else {
             activity.packageManager.getPackageInfo(activity.packageName, 0)
         }
-        return packageInfo.versionName.orEmpty().trim()
+    }
+
+    private fun resolveCurrentVersionName(): String {
+        return resolveCurrentPackageInfo().versionName.orEmpty().trim()
     }
 
     private fun compareVersionNames(left: String, right: String): Int {

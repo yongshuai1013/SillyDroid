@@ -766,11 +766,18 @@ rootfs_fs_file_count="$(find "$rootfs_fs_stage_root" -type f | wc -l | tr -d '[:
 host_prefix_file_count="$(find "$host_prefix_stage_root" -type f | wc -l | tr -d '[:space:]')"
 rootfs_fs_archive_size_bytes="$(stat -c '%s' "$rootfs_fs_archive_path")"
 host_prefix_archive_size_bytes="$(stat -c '%s' "$host_prefix_archive_path")"
+ubuntu_base_version="$(printf '%s' "$ubuntu_base_url" | sed -n 's#.*ubuntu-base-\([0-9][0-9.]*\)-base-arm64\.tar\.gz#\1#p')"
+proot_package_version="$(printf '%s' "$proot_package_url" | sed -n 's#.*/proot_\([^_]*\)_aarch64\.deb#\1#p')"
+runtime_version="$STAI_ROOTFS_VERSION"
 
 manifest_path="$resolved_target_root/rootfs-manifest.json"
 
 {
     printf '{\n'
+    printf '  "staiRootfsVersion": "%s",\n' "$(json_escape "$STAI_ROOTFS_VERSION")"
+    printf '  "runtimeVersion": "%s",\n' "$(json_escape "$runtime_version")"
+    printf '  "ubuntuBaseVersion": "%s",\n' "$(json_escape "$ubuntu_base_version")"
+    printf '  "prootVersion": "%s",\n' "$(json_escape "$proot_package_version")"
     printf '  "ubuntuBaseUrl": "%s",\n' "$(json_escape "$ubuntu_base_url")"
     printf '  "ubuntuPortsBaseUrl": "%s",\n' "$(json_escape "$ubuntu_ports_base_url")"
     printf '  "prootPackageUrl": "%s",\n' "$(json_escape "$proot_package_url")"

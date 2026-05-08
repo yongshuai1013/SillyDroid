@@ -46,9 +46,12 @@
     <string name="bootstrap_settings_about_info_title">应用信息</string>
     <string name="bootstrap_settings_about_info_body">SillyTavern Android 宿主负责在本机启动 Tavern 服务、管理扩展和执行完整数据迁移。关于页只展示宿主信息与更新状态，不会改动当前 Tavern 配置。</string>
     <string name="bootstrap_settings_about_version_title">版本信息</string>
-    <string name="bootstrap_settings_about_version_value">应用版本：%1$s
-宿主版本：%2$s
-构建类型：%3$s</string>
+    <string name="bootstrap_settings_about_version_value">APK版本：%1$s (code %2$s)
+宿主版本：%3$s
+底包版本：%4$s
+Server Payload 版本：%5$s
+构建类型：%6$s</string>
+    <string name="bootstrap_settings_about_version_unknown">未检测到</string>
     <string name="bootstrap_settings_about_update_title">应用更新</string>
     <string name="bootstrap_settings_about_update_status_idle">当前已是最新版本，可手动再次检查。</string>
     <string name="bootstrap_settings_about_update_status_available">发现新版本：%1$s</string>

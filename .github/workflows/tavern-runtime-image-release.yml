@@ -1,16 +1,6 @@
 name: tavern-runtime-image-release
 
 on:
-  push:
-    branches:
-      - master
-      - main
-    paths:
-      - .github/workflows/tavern-runtime-image-release.yml
-      - android-tavern/app/src/main/assets/bootstrap/scripts/**
-      - scripts/android-build-common.sh
-      - scripts/build-tavern-android-runtime-image.sh
-      - scripts/sync-android-rootfs.sh
   workflow_dispatch:
     inputs:
       runtime_rid:
@@ -22,7 +12,6 @@ on:
           - linux-arm64
 
 permissions:
-  actions: write
   contents: write
 
 concurrency:
@@ -204,13 +193,9 @@ jobs:
             --repo '${{ github.repository }}' \
             --clobber
 
-      - name: Trigger APK release rebuild
-        if: github.event_name == 'push'
+      - name: Cleanup publish workspace artifacts
+        if: always()
         run: |
           set -euo pipefail
 
-          gh workflow run tavern-upstream-apk.yml \
-            --repo '${{ github.repository }}' \
-            -f build_type=release \
-            -f force_rebuild=true \
-            -f publish_release=true
+          rm -rf "$GITHUB_WORKSPACE/artifacts/release"

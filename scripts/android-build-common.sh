@@ -13,6 +13,7 @@ readonly STAI_ANDROID_BUILD_COMMON_LOADED=1
 : "${STAI_DOTNET_CHANNEL:=10.0}"
 : "${STAI_DOTNET_INSTALL_SCRIPT_URL:=https://dot.net/v1/dotnet-install.sh}"
 : "${STAI_NODE_VERSION:=25.2.1}"
+: "${STAI_ROOTFS_VERSION:=1.0.0}"
 
 stai_log() {
     printf '[stai-android][%s] %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" >&2

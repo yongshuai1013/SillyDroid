@@ -138,6 +138,7 @@ apply_server_package() {
     local server_root="$project_root/app/src/main/assets/bootstrap/server"
     local archive_path="$server_root/server-payload.zip"
     local manifest_path="$server_root/bootstrap-manifest.json"
+    local source_manifest_path="$(dirname "$package_path")/bootstrap-manifest.json"
     local archive_size_bytes='0'
     local synced_at_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
@@ -148,7 +149,10 @@ apply_server_package() {
     cp -f "$package_path" "$archive_path"
     archive_size_bytes="$(stat -c '%s' "$archive_path")"
 
-    cat > "$manifest_path" <<EOF
+    if [[ -f "$source_manifest_path" ]]; then
+        cp -f "$source_manifest_path" "$manifest_path"
+    else
+        cat > "$manifest_path" <<EOF
 {
   "runtimeRid": "$runtime_rid",
   "sourcePackage": "$(basename "$package_path")",
@@ -157,6 +161,7 @@ apply_server_package() {
   "archiveSizeBytes": $archive_size_bytes
 }
 EOF
+    fi
 
     stai_log "已应用 Tavern server 底包：$package_path"
 }

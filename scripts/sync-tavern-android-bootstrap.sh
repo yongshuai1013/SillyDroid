@@ -182,10 +182,15 @@ mapfile -t packaged_files < <(find "$payload_root" -type f -printf '%P\n' | LC_A
 rm -f "$server_archive_path"
 "$jar_path" --create --file "$server_archive_path" --no-manifest -C "$payload_root" .
 server_archive_size_bytes="$(stat -c '%s' "$server_archive_path")"
+payload_version="$STAI_TAVERN_TAG"
+if [[ -n "$STAI_NODE_VERSION" ]]; then
+    payload_version="$payload_version+node.$STAI_NODE_VERSION"
+fi
 
 {
     printf '{\n'
     printf '  "package": "%s",\n' "$(json_escape "SillyTavern")"
+    printf '  "payloadVersion": "%s",\n' "$(json_escape "$payload_version")"
     printf '  "runtimeRid": "%s",\n' "$(json_escape "$runtime_rid")"
     printf '  "tag": "%s",\n' "$(json_escape "$STAI_TAVERN_TAG")"
     printf '  "nodeVersion": "%s",\n' "$(json_escape "$STAI_NODE_VERSION")"
