@@ -14,9 +14,35 @@ readonly STAI_ANDROID_BUILD_COMMON_LOADED=1
 : "${STAI_DOTNET_INSTALL_SCRIPT_URL:=https://dot.net/v1/dotnet-install.sh}"
 : "${STAI_NODE_VERSION:=25.2.1}"
 : "${STAI_ROOTFS_VERSION:=1.0.0}"
+: "${STAI_DOWNLOAD_PARALLELISM:=4}"
+
+if [[ -n "${workspace_root:-}" && -d "$workspace_root/scripts" ]]; then
+    readonly STAI_ANDROID_BUILD_SCRIPTS_DIR="$workspace_root/scripts"
+else
+    readonly STAI_ANDROID_BUILD_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+readonly STAI_DOWNLOAD_PROGRESS_SCRIPT_PATH="$STAI_ANDROID_BUILD_SCRIPTS_DIR/download-with-progress.py"
+readonly STAI_EXTRACT_PROGRESS_SCRIPT_PATH="$STAI_ANDROID_BUILD_SCRIPTS_DIR/extract-with-progress.py"
+
+declare -ag STAI_DOWNLOAD_QUEUE=()
 
 stai_log() {
     printf '[stai-android][%s] %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" >&2
+}
+
+stai_progress_stage() {
+    local current_step="$1"
+    local total_steps="$2"
+    local message="$3"
+    local percent='0'
+
+    if [[ "$total_steps" =~ ^[0-9]+$ && "$total_steps" -gt 0 && "$current_step" =~ ^[0-9]+$ ]]; then
+        percent="$((current_step * 100 / total_steps))"
+        stai_log "[$current_step/$total_steps ${percent}%] $message"
+        return
+    fi
+
+    stai_log "$message"
 }
 
 stai_warn() {
@@ -92,9 +118,22 @@ stai_detect_node_arch() {
     esac
 }
 
-stai_download_file_if_missing() {
+stai_download_progress_script() {
+    printf '%s\n' "$STAI_DOWNLOAD_PROGRESS_SCRIPT_PATH"
+}
+
+stai_extract_progress_script() {
+    printf '%s\n' "$STAI_EXTRACT_PROGRESS_SCRIPT_PATH"
+}
+
+stai_download_queue_reset() {
+    STAI_DOWNLOAD_QUEUE=()
+}
+
+stai_queue_download_if_missing() {
     local uri="$1"
     local destination_path="$2"
+    local label="${3:-$(basename "$destination_path")}"
 
     if [[ -f "$destination_path" ]]; then
         stai_log "复用下载缓存：$destination_path"
@@ -102,18 +141,88 @@ stai_download_file_if_missing() {
     fi
 
     mkdir -p "$(dirname "$destination_path")"
-    stai_log "下载依赖：$uri"
-    if [[ -n "$(stai_find_command curl)" ]]; then
-        curl -L --fail --output "$destination_path" "$uri"
+    STAI_DOWNLOAD_QUEUE+=("$label"$'\t'"$uri"$'\t'"$destination_path")
+}
+
+stai_run_download_queue() {
+    local manifest_path=''
+    local entry=''
+    local label=''
+    local uri=''
+    local destination_path=''
+    local progress_script="$STAI_DOWNLOAD_PROGRESS_SCRIPT_PATH"
+
+    if [[ "${#STAI_DOWNLOAD_QUEUE[@]}" -eq 0 ]]; then
         return
     fi
 
-    if [[ -n "$(stai_find_command wget)" ]]; then
-        wget -O "$destination_path" "$uri"
+    stai_log "开始下载 ${#STAI_DOWNLOAD_QUEUE[@]} 个文件"
+
+    if command -v python3 >/dev/null 2>&1 && [[ -f "$progress_script" ]]; then
+        manifest_path="$(mktemp)"
+        printf '%s\n' "${STAI_DOWNLOAD_QUEUE[@]}" > "$manifest_path"
+        python3 "$progress_script" --manifest "$manifest_path" --jobs "$STAI_DOWNLOAD_PARALLELISM"
+        rm -f "$manifest_path"
+        STAI_DOWNLOAD_QUEUE=()
         return
     fi
 
-    stai_fail "缺少 curl 或 wget，无法下载：$uri"
+    for entry in "${STAI_DOWNLOAD_QUEUE[@]}"; do
+        IFS=$'\t' read -r label uri destination_path <<< "$entry"
+        stai_log "下载依赖：$uri"
+        if [[ -n "$(stai_find_command curl)" ]]; then
+            curl -L --fail --progress-bar --output "$destination_path" "$uri"
+            continue
+        fi
+
+        if [[ -n "$(stai_find_command wget)" ]]; then
+            wget -O "$destination_path" "$uri"
+            continue
+        fi
+
+        stai_fail "缺少 curl 或 wget，无法下载：$uri"
+    done
+
+    STAI_DOWNLOAD_QUEUE=()
+}
+
+stai_download_file_if_missing() {
+    local uri="$1"
+    local destination_path="$2"
+    local label="${3:-$(basename "$destination_path")}"
+
+    stai_download_queue_reset
+    stai_queue_download_if_missing "$uri" "$destination_path" "$label"
+    stai_run_download_queue
+}
+
+stai_extract_archive_with_progress() {
+    local archive_path="$1"
+    local destination_root="$2"
+    local label="$3"
+    local strip_components="${4:-0}"
+    local progress_script="$STAI_EXTRACT_PROGRESS_SCRIPT_PATH"
+
+    mkdir -p "$destination_root"
+
+    if command -v python3 >/dev/null 2>&1 && [[ -f "$progress_script" ]]; then
+        if python3 "$progress_script" \
+            --archive "$archive_path" \
+            --destination "$destination_root" \
+            --label "$label" \
+            --strip-components "$strip_components"; then
+            return
+        fi
+
+        stai_log "进度解压器失败，回退到系统解压：$label"
+    fi
+
+    stai_log "开始解压：$label"
+    if [[ "$archive_path" == *.zip ]]; then
+        unzip -q -o "$archive_path" -d "$destination_root"
+    else
+        tar -xf "$archive_path" -C "$destination_root"
+    fi
 }
 
 stai_is_valid_java_home() {
@@ -182,7 +291,7 @@ stai_ensure_java_home() {
     stai_download_file_if_missing "$archive_url" "$archive_path"
     rm -rf "$extract_root" "$current_root"
     mkdir -p "$extract_root"
-    tar -xf "$archive_path" -C "$extract_root"
+    stai_extract_archive_with_progress "$archive_path" "$extract_root" 'temurin-jdk'
     extracted_dir="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
     stai_assert_path_exists "$extracted_dir" "JDK 解压失败：$archive_path"
     mv "$extracted_dir" "$current_root"
@@ -253,7 +362,7 @@ stai_ensure_node() {
     stai_download_file_if_missing "$archive_url" "$archive_path"
     rm -rf "$extract_root" "$current_root"
     mkdir -p "$extract_root"
-    tar -xf "$archive_path" -C "$extract_root"
+    stai_extract_archive_with_progress "$archive_path" "$extract_root" 'node-runtime'
     extracted_dir="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
     stai_assert_path_exists "$extracted_dir" "Node.js 解压失败：$archive_path"
     mv "$extracted_dir" "$current_root"
@@ -359,7 +468,7 @@ stai_ensure_linux_android_sdk() {
         stai_download_file_if_missing "$STAI_ANDROID_CMDLINE_TOOLS_URL" "$archive_path"
         rm -rf "$cmdline_tools_root" "$sdk_root/cmdline-tools/cmdline-tools"
         mkdir -p "$sdk_root/cmdline-tools"
-        unzip -q -o "$archive_path" -d "$sdk_root/cmdline-tools"
+        stai_extract_archive_with_progress "$archive_path" "$sdk_root/cmdline-tools" 'android-cmdline-tools'
         mv "$sdk_root/cmdline-tools/cmdline-tools" "$cmdline_tools_root"
     fi
 
@@ -418,7 +527,7 @@ stai_ensure_linux_android_ndk_root() {
     stai_download_file_if_missing "$STAI_ANDROID_NDK_LINUX_URL" "$archive_path"
     rm -rf "$sdk_root/ndk/$STAI_ANDROID_NDK_VERSION"
     mkdir -p "$sdk_root/ndk"
-    unzip -q -o "$archive_path" -d "$sdk_root/ndk"
+    stai_extract_archive_with_progress "$archive_path" "$sdk_root/ndk" 'android-ndk'
     ndk_root="$sdk_root/ndk/$STAI_ANDROID_NDK_VERSION"
     stai_assert_path_exists "$ndk_root/toolchains/llvm/prebuilt/linux-x86_64" "Android NDK 安装失败：$ndk_root"
     export STAI_ANDROID_NDK_ROOT="$ndk_root"

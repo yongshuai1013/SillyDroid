@@ -130,10 +130,10 @@
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="88dp"
         android:visibility="gone"
-        app:cardBackgroundColor="#F8FAFC"
+        app:cardBackgroundColor="@color/floating_logs_panel_background"
         app:cardCornerRadius="20dp"
         app:cardElevation="8dp"
-        app:strokeColor="#D1D5DB"
+        app:strokeColor="@color/floating_logs_panel_stroke"
         app:strokeWidth="1dp">
 
         <LinearLayout
@@ -156,7 +156,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:text="@string/floating_logs_panel_title"
-                    android:textColor="#111827"
+                    android:textColor="@color/floating_logs_panel_title"
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
@@ -168,7 +168,7 @@
                     android:contentDescription="@string/floating_logs_panel_close"
                     android:padding="6dp"
                     android:src="@android:drawable/ic_menu_close_clear_cancel"
-                    android:tint="#4B5563" />
+                    android:tint="@color/floating_logs_panel_secondary_text" />
             </LinearLayout>
 
             <TextView
@@ -176,7 +176,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:textColor="#374151"
+                android:textColor="@color/floating_logs_panel_secondary_text"
                 android:textSize="11sp"
                 android:textStyle="bold"
                 android:visibility="gone" />
@@ -186,10 +186,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:background="#E5E7EB"
+                android:background="@color/floating_logs_panel_surface"
                 android:padding="10dp"
                 android:text="@string/bootstrap_settings_logs_empty"
-                android:textColor="#4B5563"
+                android:textColor="@color/floating_logs_panel_secondary_text"
                 android:textSize="11sp"
                 android:visibility="gone" />
 
@@ -199,7 +199,7 @@
                 android:layout_height="0dp"
                 android:layout_marginTop="8dp"
                 android:layout_weight="1"
-                android:background="#E5E7EB"
+                android:background="@color/floating_logs_panel_surface"
                 android:fadeScrollbars="false"
                 android:fillViewport="true">
                 android:scrollbarSize="14dp"
@@ -211,7 +211,7 @@
                     android:fontFamily="monospace"
                     android:lineSpacingExtra="1dp"
                     android:padding="10dp"
-                    android:textColor="#111827"
+                    android:textColor="@color/floating_logs_panel_content"
                     android:textIsSelectable="true"
                     android:textSize="10sp"
                     android:visibility="gone" />
@@ -230,7 +230,7 @@
         android:contentDescription="@string/floating_logs_bubble_description"
         android:gravity="center"
         android:text="@string/floating_logs_bubble_label"
-        android:textColor="#FFFFFF"
+        android:textColor="@color/floating_logs_bubble_text"
         android:textSize="12sp"
         android:textStyle="bold"
         android:visibility="gone" />

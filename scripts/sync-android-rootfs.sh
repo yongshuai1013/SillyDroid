@@ -109,32 +109,61 @@ download_file_if_missing() {
     local uri="$1"
     local destination_path="$2"
 
-    if [[ -f "$destination_path" ]]; then
-        return
-    fi
-
-    mkdir -p "$(dirname "$destination_path")"
-    curl -L --fail --output "$destination_path" "$uri"
+    stai_download_file_if_missing "$uri" "$destination_path"
 }
 
 expand_deb_archive() {
     local package_path="$1"
     local destination_root="$2"
+    local label="${3:-$(basename "$package_path") }"
+    local member_count='0'
+    local current_member='0'
+    local member_name
+    local tty='0'
 
     rm -rf "$destination_root"
     mkdir -p "$destination_root"
-    (
-        cd "$destination_root"
-        ar x "$package_path"
-    )
+
+    if [[ -t 2 ]]; then
+        tty='1'
+    fi
+
+    mapfile -t deb_members < <(ar t "$package_path")
+    member_count="${#deb_members[@]}"
+    for member_name in "${deb_members[@]}"; do
+        current_member=$((current_member + 1))
+        if [[ "$tty" == '1' ]]; then
+            printf '\r\x1b[2K%s 解压中 %5.1f%% %s/%s' "$label" "$(python3 - <<'PY' "$current_member" "$member_count"
+import sys
+current = int(sys.argv[1])
+total = int(sys.argv[2])
+print(f"{(current * 100.0 / total) if total else 100.0:.1f}")
+PY
+)" "$current_member" "$member_count" >&2
+        else
+            printf '%s 解压中 %5.1f%% %s/%s\n' "$label" "$(python3 - <<'PY' "$current_member" "$member_count"
+import sys
+current = int(sys.argv[1])
+total = int(sys.argv[2])
+print(f"{(current * 100.0 / total) if total else 100.0:.1f}")
+PY
+)" "$current_member" "$member_count" >&2
+        fi
+        ar p "$package_path" "$member_name" > "$destination_root/$member_name"
+    done
+
+    if [[ "$tty" == '1' && "$member_count" -gt 0 ]]; then
+        printf '\n' >&2
+    fi
 }
 
 expand_tar_archive() {
     local archive_path="$1"
     local destination_root="$2"
+    local label="${3:-$(basename "$archive_path") }"
 
     mkdir -p "$destination_root"
-    tar -xf "$archive_path" -C "$destination_root"
+    stai_extract_archive_with_progress "$archive_path" "$destination_root" "$label"
 }
 
 expand_gzip_file() {
@@ -281,7 +310,7 @@ ensure_linux_ndk_root() {
     mkdir -p "$cached_sdk_root/ndk"
     download_file_if_missing "$android_ndk_linux_url" "$cached_ndk_zip_path"
     rm -rf "$cached_ndk_root"
-    unzip -q -o "$cached_ndk_zip_path" -d "$cached_sdk_root/ndk"
+    stai_extract_archive_with_progress "$cached_ndk_zip_path" "$cached_sdk_root/ndk" 'android-ndk'
     assert_path_exists "$cached_ndk_root/toolchains/llvm/prebuilt/linux-x86_64" "Unable to provision Linux Android NDK from $android_ndk_linux_url"
     realpath "$cached_ndk_root"
 }
@@ -642,12 +671,15 @@ then
 fi
 
 mkdir -p "$downloads_root" "$apt_indexes_root" "$apt_packages_root"
-download_file_if_missing "$proot_package_url" "$proot_package_path"
-download_file_if_missing "$proot_source_url" "$proot_source_archive_path"
-download_file_if_missing "$termux_packages_index_url" "$termux_packages_index_path"
-download_file_if_missing "$ubuntu_base_url" "$ubuntu_archive_path"
+stai_download_queue_reset
+stai_queue_download_if_missing "$proot_package_url" "$proot_package_path" 'proot-termux'
+stai_queue_download_if_missing "$proot_source_url" "$proot_source_archive_path" 'proot-source'
+stai_queue_download_if_missing "$termux_packages_index_url" "$termux_packages_index_path" 'termux-packages-index'
+stai_queue_download_if_missing "$ubuntu_base_url" "$ubuntu_archive_path" 'ubuntu-base-rootfs'
+stai_run_download_queue
 
 stai_ensure_java_home
+stai_log "开始准备 Android SDK/NDK 工具链"
 android_sdk_root="$(stai_resolve_linux_android_sdk_root)"
 stai_ensure_linux_android_sdk "$android_sdk_root"
 ndk_root="$(stai_ensure_linux_android_ndk_root "$android_sdk_root")"
@@ -658,7 +690,8 @@ assert_path_exists "$jar_path" "缺少 jar 命令。Android rootfs 资产归档�
 rm -rf "$assets_stage_root" "$termux_extract_root" "$proot_build_root" "$rootfs_extract_root"
 mkdir -p "$host_prefix_stage_root/lib" "$rootfs_fs_stage_root" "$termux_extract_root" "$proot_build_root" "$rootfs_extract_root"
 
-expand_deb_archive "$proot_package_path" "$termux_extract_root/proot-deb"
+stai_log "开始解包 Termux proot 与运行时依赖"
+expand_deb_archive "$proot_package_path" "$termux_extract_root/proot-deb" 'termux:proot-deb'
 proot_control_archive_path="$(find "$termux_extract_root/proot-deb" -maxdepth 1 -type f -name 'control.tar*' | head -n 1)"
 assert_path_exists "$proot_control_archive_path" "control.tar archive was not found in $proot_package_path"
 
@@ -671,19 +704,27 @@ load_termux_package_table "$termux_packages_index_path" 'https://packages.termux
 mapfile -t proot_dependency_names < <(normalize_dependency_names "$proot_depends_value")
 mapfile -t resolved_termux_dependency_names < <(resolve_termux_package_dependencies "${proot_dependency_names[@]}")
 
+stai_download_queue_reset
+for dependency_name in "${resolved_termux_dependency_names[@]}"; do
+    dependency_url="${termux_repo_by_package[$dependency_name]}/${termux_filename_by_package[$dependency_name]}"
+    dependency_package_path="$downloads_root/$(basename "${termux_filename_by_package[$dependency_name]}")"
+    stai_queue_download_if_missing "$dependency_url" "$dependency_package_path" "termux:$dependency_name"
+done
+stai_run_download_queue
+
+stai_log "开始展开 ${#resolved_termux_dependency_names[@]} 个 Termux 依赖包"
 for dependency_name in "${resolved_termux_dependency_names[@]}"; do
     dependency_url="${termux_repo_by_package[$dependency_name]}/${termux_filename_by_package[$dependency_name]}"
     dependency_package_path="$downloads_root/$(basename "${termux_filename_by_package[$dependency_name]}")"
     dependency_deb_root="$termux_extract_root/$dependency_name-deb"
     dependency_data_root="$termux_extract_root/$dependency_name-data"
 
-    download_file_if_missing "$dependency_url" "$dependency_package_path"
-    expand_deb_archive "$dependency_package_path" "$dependency_deb_root"
+    expand_deb_archive "$dependency_package_path" "$dependency_deb_root" "termux:$dependency_name-deb"
     dependency_data_archive_path="$(find "$dependency_deb_root" -maxdepth 1 -type f -name 'data.tar*' | head -n 1)"
     assert_path_exists "$dependency_data_archive_path" "data.tar archive was not found in $dependency_package_path"
     rm -rf "$dependency_data_root"
     mkdir -p "$dependency_data_root"
-    expand_tar_archive "$dependency_data_archive_path" "$dependency_data_root"
+    expand_tar_archive "$dependency_data_archive_path" "$dependency_data_root" "termux:$dependency_name-data"
 
     while IFS= read -r lib_dir; do
         copy_resolved_directory_contents "$lib_dir" "$host_prefix_stage_root/lib"
@@ -692,7 +733,7 @@ done
 
 rm -rf "$proot_build_root/source"
 mkdir -p "$proot_build_root/source"
-unzip -q -o "$proot_source_archive_path" -d "$proot_build_root/source"
+stai_extract_archive_with_progress "$proot_source_archive_path" "$proot_build_root/source" 'proot-source'
 proot_source_root="$(find "$proot_build_root/source" -mindepth 1 -maxdepth 1 -type d -name 'proot-*' | LC_ALL=C sort | head -n 1)"
 assert_path_exists "$proot_source_root" "Unable to extract Termux proot source from $proot_source_archive_path"
 
@@ -709,6 +750,7 @@ for dependency_name in "${resolved_termux_dependency_names[@]}"; do
 done
 copy_resolved_directory_contents "$host_prefix_stage_root/lib" "$libtalloc_lib_root"
 
+stai_log "开始编译 proot 原生库"
 build_termux_proot "$proot_source_root" "$ndk_prebuilt_root" "$libtalloc_include_root" "$libtalloc_lib_root" "$host_prefix_stage_root" "$proot_build_root/toolwrap"
 sync_host_runtime_jni_libs "$host_prefix_stage_root" "$resolved_jni_libs_root"
 
@@ -717,9 +759,20 @@ if ! test_tar_contains_path "$ubuntu_archive_path" 'usr/bin/sh'; then
     exit 1
 fi
 
-expand_tar_archive "$ubuntu_archive_path" "$rootfs_extract_root"
+stai_log "开始解压 Ubuntu base rootfs"
+expand_tar_archive "$ubuntu_archive_path" "$rootfs_extract_root" 'ubuntu-base-rootfs'
 copy_resolved_directory_contents "$rootfs_extract_root" "$rootfs_fs_stage_root"
 
+stai_download_queue_reset
+for ((index = 0; index < ${#apt_repo_names[@]}; index++)); do
+    repo_name="${apt_repo_names[$index]}"
+    repo_url="${apt_repo_urls[$index]}"
+    repo_archive_path="$apt_indexes_root/$repo_name.Packages.gz"
+    stai_queue_download_if_missing "$repo_url" "$repo_archive_path" "apt-index:$repo_name"
+done
+stai_run_download_queue
+
+stai_log "开始解析 APT 索引"
 for ((index = 0; index < ${#apt_repo_names[@]}; index++)); do
     repo_name="${apt_repo_names[$index]}"
     repo_url="${apt_repo_urls[$index]}"
@@ -727,26 +780,33 @@ for ((index = 0; index < ${#apt_repo_names[@]}; index++)); do
     repo_archive_path="$apt_indexes_root/$repo_name.Packages.gz"
     repo_index_path="$apt_indexes_root/$repo_name.Packages"
 
-    download_file_if_missing "$repo_url" "$repo_archive_path"
     expand_gzip_file "$repo_archive_path" "$repo_index_path"
     add_apt_package_entries_from_index "$repo_index_path" "$repo_base"
 done
 
 mapfile -t resolved_offline_runtime_packages < <(resolve_apt_package_dependencies "${offline_runtime_packages[@]}")
+stai_download_queue_reset
+for package_name in "${resolved_offline_runtime_packages[@]}"; do
+    package_path="$apt_packages_root/$(basename "${apt_filename_by_package[$package_name]}")"
+    package_url="${apt_repo_by_package[$package_name]}/${apt_filename_by_package[$package_name]}"
+    stai_queue_download_if_missing "$package_url" "$package_path" "apt:$package_name"
+done
+stai_run_download_queue
+
+stai_log "开始展开 ${#resolved_offline_runtime_packages[@]} 个离线运行库包"
 for package_name in "${resolved_offline_runtime_packages[@]}"; do
     package_path="$apt_packages_root/$(basename "${apt_filename_by_package[$package_name]}")"
     package_url="${apt_repo_by_package[$package_name]}/${apt_filename_by_package[$package_name]}"
     package_deb_root="$working_root/apt-deb-$package_name"
     package_data_root="$working_root/apt-data-$package_name"
 
-    download_file_if_missing "$package_url" "$package_path"
-    expand_deb_archive "$package_path" "$package_deb_root"
+    expand_deb_archive "$package_path" "$package_deb_root" "apt:$package_name-deb"
     package_data_archive_path="$(find "$package_deb_root" -maxdepth 1 -type f -name 'data.tar*' | head -n 1)"
     assert_path_exists "$package_data_archive_path" "data.tar archive was not found in $package_path"
 
     rm -rf "$package_data_root"
     mkdir -p "$package_data_root"
-    expand_tar_archive "$package_data_archive_path" "$package_data_root"
+    expand_tar_archive "$package_data_archive_path" "$package_data_root" "apt:$package_name-data"
     copy_resolved_directory_contents "$package_data_root" "$rootfs_fs_stage_root"
 done
 
@@ -759,6 +819,7 @@ mkdir -p "$resolved_target_root"
 
 # 把 rootfs fs/usr 资产收敛成两个 ZIP，直接减少 Gradle merge/compress assets 的文件数。
 rm -f "$rootfs_fs_archive_path" "$host_prefix_archive_path"
+stai_log "开始归档 rootfs fs/usr 资产"
 "$jar_path" --create --file "$rootfs_fs_archive_path" --no-manifest -C "$rootfs_fs_stage_root" .
 "$jar_path" --create --file "$host_prefix_archive_path" --no-manifest -C "$host_prefix_stage_root" .
 

@@ -194,10 +194,13 @@ stage_root="$working_root/stage"
 output_directory="$(dirname "$output_path")"
 
 mkdir -p "$output_directory"
+stai_progress_stage 1 3 "开始生成 Tavern rootfs 资产"
 generate_tavern_rootfs_assets "$working_root" "$tavern_rootfs_root" "$tavern_jni_lib_root"
+stai_progress_stage 2 3 "开始整理 runtime image stage"
 stage_runtime_image "$stage_root" "$tavern_rootfs_root" "$tavern_jni_lib_root"
 
 rm -f "$output_path"
+stai_progress_stage 3 3 "开始归档 Tavern Android runtime image"
 "$JAVA_HOME/bin/jar" --create --file "$output_path" --no-manifest -C "$stage_root" .
 stai_assert_path_exists "$output_path" "Tavern Android runtime image 打包失败：$output_path"
 write_runtime_image_metadata "$output_path" "$metadata_path"

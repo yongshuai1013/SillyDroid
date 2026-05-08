@@ -44,11 +44,13 @@
 - `scripts/sync-android-rootfs.sh`
   生成离线 Linux rootfs、proot 及相关运行时资产。
 - `scripts/sync-tavern-android-bootstrap.sh`
-  下载指定 SillyTavern tag 与 Linux arm64 Node runtime，生成 `server-payload.zip`。
+  下载指定 SillyTavern tag，生成 `server-core.zip`；需要时也可配合 dependency packs 产出完整 server payload。
+- `scripts/build-tavern-dependency-packs.sh`
+  单独构建 `node`、`git` 等 dependency pack zip。
 - `scripts/build-tavern-android-runtime-image.sh`
   生成 Tavern 专用 runtime image 及 metadata。
 - `scripts/build-tavern-android-apk.sh`
-  向 `android-tavern/` 注入 runtime image 与 server package，组装 debug 或 release APK。
+  默认只把现有 runtime image、server core、dependency packs 合并进 `android-tavern/`，组装 debug 或 release APK。
 - `.github/workflows/`
   包含 runtime 资产发布与 upstream APK 发布两条工作流。
 
@@ -59,41 +61,51 @@
 - 当前链路只支持 `linux-arm64`。
 - Android SDK/JDK 不要求先手工装齐；构建脚本会按当前实现自动补齐缺失部分。
 
-## 最短路径
+## 本地推荐流程
 
-在 Linux 或 WSL bash 中，在仓库根目录执行：
+本地推荐先分别准备底包、依赖包、server core，再执行 APK 合并：
 
 ```bash
+bash ./scripts/build-tavern-android-runtime-image.sh \
+  --runtime-rid linux-arm64 \
+  --output ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
+
+bash ./scripts/build-tavern-dependency-packs.sh \
+  --runtime-rid linux-arm64
+
+bash ./scripts/sync-tavern-android-bootstrap.sh \
+  --runtime-rid linux-arm64 \
+  --tag 1.18.0 \
+  --target-root ./artifacts/validation/android-tavern-server-package/linux-arm64 \
+  --server-core-only
+
 bash ./scripts/build-tavern-android-apk.sh \
   --runtime-rid linux-arm64 \
   --build-type debug \
   --tag 1.18.0
 ```
 
-如果你在 Windows PowerShell 中直接调用，通常会这样写：
+如果你确实需要在本地一条命令补齐这些前置产物，可以显式传 `--prepare-prerequisites`：
 
-```powershell
-wsl.exe bash -lc "cd /mnt/d/Git/ST.AI.SillyTavern.Android && bash ./scripts/build-tavern-android-apk.sh --runtime-rid linux-arm64 --build-type debug --tag 1.18.0"
+```bash
+bash ./scripts/build-tavern-android-apk.sh \
+  --runtime-rid linux-arm64 \
+  --build-type debug \
+  --tag 1.18.0 \
+  --prepare-prerequisites
 ```
 
 默认会生成这些产物：
 
-- `./artifacts/validation/android-tavern-server-package/linux-arm64/server-payload.zip`
 - `./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip`
+- `./artifacts/validation/android-tavern-dependency-packs/linux-arm64/*.zip`
+- `./artifacts/validation/android-tavern-server-package/linux-arm64/server-core.zip`
+- `./artifacts/validation/android-tavern-server-package/linux-arm64/server-payload.composed.zip`
 - `./artifacts/validation/android-tavern/app-debug.apk`
 
 ## 分步构建
 
-1. 生成 Tavern server package
-
-```bash
-bash ./scripts/sync-tavern-android-bootstrap.sh \
-  --runtime-rid linux-arm64 \
-  --tag 1.18.0 \
-  --target-root ./artifacts/validation/android-tavern-server-package/linux-arm64
-```
-
-2. 生成 Tavern runtime image
+1. 生成 Tavern runtime image
 
 ```bash
 bash ./scripts/build-tavern-android-runtime-image.sh \
@@ -101,21 +113,55 @@ bash ./scripts/build-tavern-android-runtime-image.sh \
   --output ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
 ```
 
-3. 组装 Tavern APK
+2. 生成 dependency packs
+
+```bash
+bash ./scripts/build-tavern-dependency-packs.sh \
+  --runtime-rid linux-arm64
+```
+
+3. 生成 Tavern server core
+
+```bash
+bash ./scripts/sync-tavern-android-bootstrap.sh \
+  --runtime-rid linux-arm64 \
+  --tag 1.18.0 \
+  --target-root ./artifacts/validation/android-tavern-server-package/linux-arm64 \
+  --server-core-only
+```
+
+4. 组装 Tavern APK
 
 ```bash
 bash ./scripts/build-tavern-android-apk.sh \
   --runtime-rid linux-arm64 \
   --build-type debug \
-  --runtime-image ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip \
-  --server-package ./artifacts/validation/android-tavern-server-package/linux-arm64/server-payload.zip
+  --runtime-image ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
 ```
 
-4. 安装到设备（可选）
+5. 安装到设备（可选）
 
 ```powershell
 adb install -r .\artifacts\validation\android-tavern\app-debug.apk
 ```
+
+6. 验证真机上的 system git 链路（可选）
+
+这个脚本会直接复用宿主真实的 [android-tavern/app/src/main/assets/bootstrap/scripts/start-server.sh](android-tavern/app/src/main/assets/bootstrap/scripts/start-server.sh) 启动链，在设备里临时注入一个探针 entrypoint，用 Node `spawnSync('git', ...)` 依次验证：
+
+- `git --version`
+- `git ls-remote --heads <repo>`
+
+```bash
+python ./scripts/validate-android-system-git.py
+```
+
+可选参数：
+
+- `--serial <adb-serial>` 指定设备
+- `--package <package>` 指定应用包名
+- `--repo-url <git-url>` 指定远端仓库
+- `--branch <branch>` 额外验证某个分支 head
 
 ## 版本与签名规则
 

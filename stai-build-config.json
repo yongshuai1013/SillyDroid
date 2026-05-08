@@ -1,7 +1,11 @@
 {
   "build": {
     "tavernVersion": "latest",
-    "buildType": "release"
+    "buildType": "release",
+    "includeDependencyPacks": [
+      "node",
+      "git"
+    ]
   },
   "defaultExtensionRepositories": [
     {

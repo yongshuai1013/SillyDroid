@@ -79,6 +79,9 @@ jobs:
       server_release_title: ${{ steps.plan.outputs.server_release_title }}
       server_asset_name: ${{ steps.plan.outputs.server_asset_name }}
       server_manifest_name: ${{ steps.plan.outputs.server_manifest_name }}
+      dependency_release_tag: ${{ steps.plan.outputs.dependency_release_tag }}
+      dependency_release_title: ${{ steps.plan.outputs.dependency_release_title }}
+      dependency_index_name: ${{ steps.plan.outputs.dependency_index_name }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -258,10 +261,13 @@ jobs:
           runtime_release_title='Tavern Android runtime linux-arm64'
           runtime_asset_name='tavern-android-runtime-linux-arm64.zip'
           runtime_metadata_name='tavern-android-runtime-linux-arm64.metadata.json'
-          server_release_tag="tavern-server-payload-linux-arm64-${safe_tag}"
-          server_release_title="Tavern Android server payload ${normalized_tag} linux-arm64"
-          server_asset_name='server-payload.zip'
-          server_manifest_name='bootstrap-manifest.json'
+          server_release_tag="tavern-server-core-linux-arm64-${safe_tag}"
+          server_release_title="Tavern Android server core ${normalized_tag} linux-arm64"
+          server_asset_name='server-core.zip'
+          server_manifest_name='server-core-manifest.json'
+          dependency_release_tag='tavern-dependency-packs-linux-arm64'
+          dependency_release_title='Tavern Android dependency packs linux-arm64'
+          dependency_index_name='component-index.json'
 
           {
             printf 'tavern_tag=%s\n' "$normalized_tag"
@@ -287,6 +293,9 @@ jobs:
             printf 'server_release_title=%s\n' "$server_release_title"
             printf 'server_asset_name=%s\n' "$server_asset_name"
             printf 'server_manifest_name=%s\n' "$server_manifest_name"
+            printf 'dependency_release_tag=%s\n' "$dependency_release_tag"
+            printf 'dependency_release_title=%s\n' "$dependency_release_title"
+            printf 'dependency_index_name=%s\n' "$dependency_index_name"
           } >> "$GITHUB_OUTPUT"
 
       - name: Append skip summary
@@ -529,6 +538,205 @@ jobs:
             "$GITHUB_WORKSPACE/artifacts/tmp/android-tavern-runtime-image" \
             "$GITHUB_WORKSPACE/artifacts/tmp/tavern-runtime-image-linux-arm64"
 
+  dependency_prereq:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      dependency_source: ${{ steps.dependency_prereq.outputs.dependency_source }}
+      dependency_cache_hit: ${{ steps.dependency_status.outputs.dependency_cache_hit }}
+      dependency_bundle_name: ${{ steps.dependency_paths.outputs.dependency_bundle_name }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Clean dependency prerequisite workspace artifacts
+        run: |
+          set -euo pipefail
+
+          rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs"
+
+      - name: Prepare dependency prerequisite paths
+        id: dependency_paths
+        run: |
+          set -euo pipefail
+
+          dependency_asset_dir="$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs/linux-arm64"
+          dependency_bundle_name='tavern-dependency-packs-linux-arm64'
+
+          mkdir -p "$dependency_asset_dir"
+
+          {
+            printf 'dependency_asset_dir=%s\n' "$dependency_asset_dir"
+            printf 'dependency_bundle_name=%s\n' "$dependency_bundle_name"
+            printf 'dependency_index_path=%s\n' "$dependency_asset_dir/${{ needs.resolve.outputs.dependency_index_name }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached dependency prerequisite
+        id: dependency_cache
+        if: needs.resolve.outputs.force_rebuild != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.dependency_paths.outputs.dependency_asset_dir }}
+          key: tavern-upstream-dependency-prereq-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-dependency-packs.sh', 'stai-build-config.json') }}
+
+      - name: Resolve dependency prerequisite
+        id: dependency_prereq
+        run: |
+          set -euo pipefail
+
+          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
+          dependency_index_path='${{ steps.dependency_paths.outputs.dependency_index_path }}'
+          dependency_source='cache'
+
+          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.payload_changed }}' = 'true' ]; then
+            dependency_source='built'
+          elif [ -f "$dependency_index_path" ]; then
+            dependency_source='cache'
+          else
+            dependency_source='release'
+            rm -rf "$dependency_asset_dir"
+            mkdir -p "$dependency_asset_dir"
+
+            if gh release view '${{ needs.resolve.outputs.dependency_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              gh release download '${{ needs.resolve.outputs.dependency_release_tag }}' \
+                --repo '${{ github.repository }}' \
+                --dir "$dependency_asset_dir" \
+                --pattern '*.manifest.json' \
+                --pattern 'dependency-*.zip' \
+                --pattern '${{ needs.resolve.outputs.dependency_index_name }}' \
+                --clobber
+            fi
+
+            if [ ! -f "$dependency_index_path" ]; then
+              dependency_source='built'
+            fi
+          fi
+
+          if [ "$dependency_source" != 'built' ] && [ ! -f "$dependency_index_path" ]; then
+            echo "缺少依赖包索引：$dependency_index_path" >&2
+            exit 1
+          fi
+
+          printf 'dependency_source=%s\n' "$dependency_source" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout dependency packaging sources
+        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            stai-build-config.json
+            scripts
+
+      - name: Restore dependency packaging caches
+        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stai-android-toolchain
+          key: tavern-upstream-dependency-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-dependency-packs.sh', 'stai-build-config.json') }}
+          restore-keys: |
+            tavern-upstream-dependency-build-${{ runner.os }}-
+
+      - name: Install dependency packaging prerequisites
+        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
+
+      - name: Build dependency prerequisite
+        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        run: |
+          set -euo pipefail
+
+          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
+          rm -rf "$dependency_asset_dir"
+
+          bash ./scripts/build-tavern-dependency-packs.sh \
+            --runtime-rid linux-arm64 \
+            --target-root "$dependency_asset_dir" \
+            --working-root "$RUNNER_TEMP/android-tavern-dependency-packs"
+
+      - name: Finalize dependency prerequisite status
+        id: dependency_status
+        run: |
+          set -euo pipefail
+
+          dependency_source='${{ steps.dependency_prereq.outputs.dependency_source }}'
+          dependency_cache_hit='${{ steps.dependency_cache.outputs.cache-hit }}'
+
+          if [ "$dependency_source" != 'cache' ] || [ "$dependency_cache_hit" != 'true' ]; then
+            dependency_cache_hit='false'
+          fi
+
+          {
+            printf 'dependency_source=%s\n' "$dependency_source"
+            printf 'dependency_cache_hit=%s\n' "$dependency_cache_hit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish dependency prerequisite release
+        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        run: |
+          set -euo pipefail
+
+          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
+          release_tag='${{ needs.resolve.outputs.dependency_release_tag }}'
+          release_title='${{ needs.resolve.outputs.dependency_release_title }}'
+          release_notes_file="$(mktemp)"
+
+          {
+            echo '## Tavern Android dependency packs'
+            echo
+            echo '- Runtime RID: linux-arm64'
+            echo '- Source: built in tavern-upstream-apk'
+            echo '- Source commit: ${{ github.sha }}'
+            echo '- Workflow: tavern-upstream-apk'
+          } > "$release_notes_file"
+
+          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            gh release create "$release_tag" \
+              --repo '${{ github.repository }}' \
+              --target '${{ github.sha }}' \
+              --title "$release_title" \
+              --notes-file "$release_notes_file"
+          fi
+
+          gh release edit "$release_tag" \
+            --repo '${{ github.repository }}' \
+            --title "$release_title" \
+            --notes-file "$release_notes_file" > /dev/null
+
+          gh release upload "$release_tag" \
+            "$dependency_asset_dir"/* \
+            --repo '${{ github.repository }}' \
+            --clobber
+
+      - name: Upload dependency prerequisite artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dependency_paths.outputs.dependency_bundle_name }}
+          path: ${{ steps.dependency_paths.outputs.dependency_asset_dir }}
+          if-no-files-found: error
+
+      - name: Append dependency prerequisite summary
+        run: |
+          {
+            echo '### Tavern dependency packs'
+            echo
+            echo '- Runtime RID: linux-arm64'
+            echo '- Source: ${{ steps.dependency_prereq.outputs.dependency_source }}'
+            echo '- Cache hit: ${{ steps.dependency_status.outputs.dependency_cache_hit }}'
+            echo '- Release tag: ${{ needs.resolve.outputs.dependency_release_tag }}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup dependency workspace artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+
+          rm -rf \
+            "$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs" \
+            "$RUNNER_TEMP/android-tavern-dependency-packs"
+
   server_prereq:
     needs: resolve
     if: needs.resolve.outputs.should_build == 'true'
@@ -552,7 +760,7 @@ jobs:
           set -euo pipefail
 
           server_asset_dir="$GITHUB_WORKSPACE/artifacts/prerequisites/server-package/${{ needs.resolve.outputs.tavern_tag }}"
-          server_bundle_name="tavern-server-payload-${{ needs.resolve.outputs.safe_tag }}-linux-arm64"
+          server_bundle_name="tavern-server-core-${{ needs.resolve.outputs.safe_tag }}-linux-arm64"
 
           mkdir -p "$server_asset_dir"
 
@@ -564,7 +772,7 @@ jobs:
             printf 'server_sha256_path=%s\n' "$server_asset_dir/${{ needs.resolve.outputs.server_asset_name }}.sha256"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Restore cached server payload prerequisite
+      - name: Restore cached server core prerequisite
         id: server_cache
         if: needs.resolve.outputs.force_rebuild != 'true'
         uses: actions/cache@v4
@@ -574,7 +782,7 @@ jobs:
             ${{ steps.server_paths.outputs.server_manifest_path }}
           key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'stai-build-config.json') }}
 
-      - name: Resolve Tavern server payload prerequisite
+      - name: Resolve Tavern server core prerequisite
         id: server_prereq
         run: |
           set -euo pipefail
@@ -607,12 +815,12 @@ jobs:
 
           if [ "$server_source" != 'built' ]; then
             if [ ! -f "$server_package_path" ]; then
-              echo "缺少 Tavern server payload：$server_package_path" >&2
+              echo "缺少 Tavern server core：$server_package_path" >&2
               exit 1
             fi
 
             if [ ! -f "$server_manifest_path" ]; then
-              echo "缺少 Tavern server payload manifest：$server_manifest_path" >&2
+              echo "缺少 Tavern server core manifest：$server_manifest_path" >&2
               exit 1
             fi
           fi
@@ -646,7 +854,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
 
-      - name: Build Tavern server payload prerequisite
+      - name: Build Tavern server core prerequisite
         if: steps.server_prereq.outputs.server_source == 'built'
         run: |
           set -euo pipefail
@@ -660,7 +868,8 @@ jobs:
             --runtime-rid linux-arm64 \
             --tag '${{ needs.resolve.outputs.tavern_tag }}' \
             --target-root '${{ steps.server_paths.outputs.server_asset_dir }}' \
-            --working-root "$RUNNER_TEMP/android-tavern-bootstrap"
+            --working-root "$RUNNER_TEMP/android-tavern-bootstrap" \
+            --server-core-only
 
       - name: Finalize server prerequisite status
         id: server_status
@@ -683,7 +892,7 @@ jobs:
             printf 'server_cache_hit=%s\n' "$server_cache_hit"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish server payload prerequisite release
+      - name: Publish server core prerequisite release
         if: steps.server_prereq.outputs.server_source == 'built'
         run: |
           set -euo pipefail
@@ -696,7 +905,7 @@ jobs:
           release_notes_file="$(mktemp)"
 
           {
-            echo '## Tavern Android server payload'
+            echo '## Tavern Android server core'
             echo
             echo '- Runtime RID: linux-arm64'
             echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
@@ -738,7 +947,7 @@ jobs:
       - name: Append server prerequisite summary
         run: |
           {
-            echo '### Tavern server payload'
+            echo '### Tavern server core'
             echo
             echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
             echo '- Source: ${{ steps.server_prereq.outputs.server_source }}'
@@ -759,6 +968,7 @@ jobs:
     needs:
       - resolve
       - runtime_prereq
+      - dependency_prereq
       - server_prereq
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -863,6 +1073,12 @@ jobs:
           name: ${{ needs.runtime_prereq.outputs.runtime_bundle_name }}
           path: artifacts/prerequisites/runtime-image
 
+      - name: Download dependency prerequisite artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.dependency_prereq.outputs.dependency_bundle_name }}
+          path: artifacts/prerequisites/dependency-packs/linux-arm64
+
       - name: Resolve downloaded runtime artifact paths
         id: runtime_input
         run: |
@@ -919,6 +1135,38 @@ jobs:
           name: ${{ needs.server_prereq.outputs.server_bundle_name }}
           path: artifacts/prerequisites/server-package/${{ needs.resolve.outputs.tavern_tag }}
 
+      - name: Resolve downloaded dependency artifact paths
+        id: dependency_input
+        run: |
+          set -euo pipefail
+
+          dependency_root="$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs/linux-arm64"
+          dependency_index_path="$dependency_root/${{ needs.resolve.outputs.dependency_index_name }}"
+
+          if [ ! -f "$dependency_index_path" ]; then
+            mapfile -t dependency_index_candidates < <(find "$dependency_root" -type f -name '${{ needs.resolve.outputs.dependency_index_name }}' | sort)
+            case "${#dependency_index_candidates[@]}" in
+              1)
+                dependency_index_path="${dependency_index_candidates[0]}"
+                dependency_root="$(dirname "$dependency_index_path")"
+                ;;
+              0)
+                echo "缺少下载后的 dependency index：$dependency_index_path" >&2
+                exit 1
+                ;;
+              *)
+                printf '检测到多个 dependency index，无法自动判定目标文件：\n' >&2
+                printf '  %s\n' "${dependency_index_candidates[@]}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          {
+            printf 'dependency_root=%s\n' "$dependency_root"
+            printf 'dependency_index_path=%s\n' "$dependency_index_path"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Resolve downloaded server artifact paths
         id: server_input
         run: |
@@ -935,11 +1183,11 @@ jobs:
                 server_package_path="${server_package_candidates[0]}"
                 ;;
               0)
-                echo "缺少下载后的 Tavern server payload：$server_package_path" >&2
+                echo "缺少下载后的 Tavern server core：$server_package_path" >&2
                 exit 1
                 ;;
               *)
-                printf '检测到多个 Tavern server payload，无法自动判定目标文件：\n' >&2
+                printf '检测到多个 Tavern server core，无法自动判定目标文件：\n' >&2
                 printf '  %s\n' "${server_package_candidates[@]}" >&2
                 exit 1
                 ;;
@@ -953,11 +1201,11 @@ jobs:
                 server_manifest_path="${server_manifest_candidates[0]}"
                 ;;
               0)
-                echo "缺少下载后的 Tavern server payload manifest：$server_manifest_path" >&2
+                echo "缺少下载后的 Tavern server core manifest：$server_manifest_path" >&2
                 exit 1
                 ;;
               *)
-                printf '检测到多个 Tavern server payload manifest，无法自动判定目标文件：\n' >&2
+                printf '检测到多个 Tavern server core manifest，无法自动判定目标文件：\n' >&2
                 printf '  %s\n' "${server_manifest_candidates[@]}" >&2
                 exit 1
                 ;;
@@ -987,12 +1235,29 @@ jobs:
             export STAI_ANDROID_RELEASE_KEY_PASSWORD='${{ steps.signing.outputs.key_password }}'
           fi
 
+          generated_server_root="$GITHUB_WORKSPACE/artifacts/validation/android-tavern-server-package/linux-arm64"
+          validation_dependency_root="$GITHUB_WORKSPACE/artifacts/validation/android-tavern-dependency-packs/linux-arm64"
+          dependency_root='${{ steps.dependency_input.outputs.dependency_root }}'
+          dependency_index_path='${{ steps.dependency_input.outputs.dependency_index_path }}'
+
+          rm -rf "$generated_server_root"
+          rm -rf "$validation_dependency_root"
+          mkdir -p "$generated_server_root" "$validation_dependency_root"
+
+          cp '${{ steps.server_input.outputs.server_package_path }}' "$generated_server_root/server-core.zip"
+          cp '${{ steps.server_input.outputs.server_manifest_path }}' "$generated_server_root/server-core-manifest.json"
+          cp -R "$dependency_root/." "$validation_dependency_root/"
+
+          if [ -f "$dependency_index_path" ]; then
+            cp -f "$dependency_index_path" "$validation_dependency_root/${{ needs.resolve.outputs.dependency_index_name }}"
+          fi
+
           echo "Host version: ${{ needs.resolve.outputs.host_version }}"
           bash ./scripts/build-tavern-android-apk.sh \
             --runtime-rid linux-arm64 \
             --build-type '${{ needs.resolve.outputs.build_type }}' \
             --runtime-image '${{ steps.runtime_input.outputs.runtime_image_path }}' \
-            --server-package '${{ steps.server_input.outputs.server_package_path }}'
+            --tag '${{ needs.resolve.outputs.tavern_tag }}'
 
           source_apk_path="$GITHUB_WORKSPACE/artifacts/validation/android-tavern/app-${{ needs.resolve.outputs.build_type }}.apk"
           release_asset_dir="$GITHUB_WORKSPACE/artifacts/release"
@@ -1051,8 +1316,10 @@ jobs:
             echo '- Signing source: ${{ steps.signing.outputs.signing_source || 'none' }}'
             echo '- Runtime prerequisite source: ${{ needs.runtime_prereq.outputs.runtime_source }}'
             echo '- Runtime image: ${{ needs.resolve.outputs.runtime_asset_name }}'
-            echo '- Server payload source: ${{ needs.server_prereq.outputs.server_source }}'
-            echo '- Server payload tag: ${{ needs.resolve.outputs.tavern_tag }}'
+            echo '- Dependency packs source: ${{ needs.dependency_prereq.outputs.dependency_source }}'
+            echo '- Dependency packs release: ${{ needs.resolve.outputs.dependency_release_tag }}'
+            echo '- Server core source: ${{ needs.server_prereq.outputs.server_source }}'
+            echo '- Server core tag: ${{ needs.resolve.outputs.tavern_tag }}'
             echo '- Release asset: ${{ steps.package.outputs.release_asset_name }}'
             echo '- SHA256: ${{ steps.package.outputs.apk_sha256 }}'
             echo '- Size bytes: ${{ steps.package.outputs.apk_size_bytes }}'
@@ -1072,6 +1339,7 @@ jobs:
     needs:
       - resolve
       - runtime_prereq
+      - dependency_prereq
       - server_prereq
       - build
     if: needs.resolve.outputs.should_build == 'true' && needs.resolve.outputs.publish_release == 'true'
@@ -1103,8 +1371,10 @@ jobs:
             echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
             echo '- Runtime prerequisite source: ${{ needs.runtime_prereq.outputs.runtime_source }}'
             echo '- Runtime image: ${{ needs.resolve.outputs.runtime_asset_name }}'
-            echo '- Server payload source: ${{ needs.server_prereq.outputs.server_source }}'
-            echo '- Server payload tag: ${{ needs.resolve.outputs.tavern_tag }}'
+            echo '- Dependency packs source: ${{ needs.dependency_prereq.outputs.dependency_source }}'
+            echo '- Dependency packs release: ${{ needs.resolve.outputs.dependency_release_tag }}'
+            echo '- Server core source: ${{ needs.server_prereq.outputs.server_source }}'
+            echo '- Server core tag: ${{ needs.resolve.outputs.tavern_tag }}'
             echo '- APK asset: ${{ needs.build.outputs.release_asset_name }}'
             echo '- SHA256: ${{ needs.build.outputs.apk_sha256 }}'
             echo '- Size bytes: ${{ needs.build.outputs.apk_size_bytes }}'

@@ -1822,7 +1822,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
             SERVER_MOUNT="/tavern/server"
             DATA_MOUNT="/tavern/data"
             LOGS_MOUNT="/tavern/logs"
-            SERVER_NODE_BIN="${'$'}SERVER_MOUNT/node/bin/node"
             GUEST_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
 
             assert_file() {
@@ -1845,7 +1844,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 assert_dir "${'$'}LINUX_FS_DIR" "缺少 Linux rootfs：${'$'}LINUX_FS_DIR"
                 assert_file "${'$'}ANDROID_RESOLV_CONF" "缺少 Android DNS 配置：${'$'}ANDROID_RESOLV_CONF"
                 assert_dir "${'$'}SERVER_DIR" "缺少 Tavern 服务目录：${'$'}SERVER_DIR"
-                assert_file "${'$'}SERVER_DIR/node/bin/node" "缺少 Tavern Node runtime：${'$'}SERVER_DIR/node/bin/node"
 
                 mkdir -p "${'$'}APP_DATA_ROOT" "${'$'}LOGS_DIR" "${'$'}PROOT_TMP_DIR"
                 chmod 1777 "${'$'}PROOT_TMP_DIR"
@@ -1865,7 +1863,12 @@ internal class BootstrapSettingsExtensionsCoordinator(
             export TMP=/tmp
             export TEMP=/tmp
             export HOME=/tmp
-                export PATH="${'$'}SERVER_MOUNT/node/bin:${'$'}GUEST_PATH"
+
+                if [ -f "${'$'}SERVER_DIR/dependency-env.sh" ]; then
+                    # shellcheck disable=SC1091
+                    . "${'$'}SERVER_DIR/dependency-env.sh"
+                fi
+                export PATH="${'$'}PATH:${'$'}GUEST_PATH"
 
                 exec "${'$'}PROOT_BIN" -r "${'$'}LINUX_FS_DIR" \
             	-b /dev \
@@ -1877,7 +1880,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 	-b "${'$'}APP_DATA_ROOT:${'$'}DATA_MOUNT" \
                 	-b "${'$'}LOGS_DIR:${'$'}LOGS_MOUNT" \
                 	-w "${'$'}SERVER_MOUNT" \
-                	/bin/sh -lc 'cd /tavern/server && /tavern/server/node/bin/node "${'$'}COMMAND_JS"'
+                	/bin/sh -lc 'cd /tavern/server; if [ -f ./dependency-env.sh ]; then . ./dependency-env.sh; fi; NODE_BIN="${'$'}{TAVERN_NODE_BIN:-./node/bin/node}"; if [ ! -x "${'$'}NODE_BIN" ]; then NODE_BIN="$(command -v node || true)"; fi; if [ -z "${'$'}NODE_BIN" ] || [ ! -x "${'$'}NODE_BIN" ]; then echo "缺少可执行的 Node runtime，请确认已导入 node 依赖包。" >&2; exit 1; fi; "${'$'}NODE_BIN" "${'$'}COMMAND_JS"'
         """.trimIndent()
     }
 

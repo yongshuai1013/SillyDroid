@@ -229,11 +229,8 @@ internal class AssetExtractor(private val context: Context) {
             requiredRelativePaths = listOf(
                 "bootstrap-manifest.json",
                 "tavern-entrypoint.sh",
-                "node/bin/node"
-            ),
-            requiredExecutableRelativePaths = listOf(
-                "tavern-entrypoint.sh",
-                "node/bin/node"
+                "node/bin/node",
+                "dependency-post-extract.sh"
             )
         )
         if (serverDirectoryRefreshed) {
@@ -246,12 +243,7 @@ internal class AssetExtractor(private val context: Context) {
             extractArchiveAsset(
                 assetPath = "${BootConfig.bootstrapAssetRoot}/server/server-payload.zip",
                 targetDirectory = paths.serverDir,
-                shouldSetExecutable = { relativePath ->
-                    // Tavern payload 里的 Node runtime 是 zip 解包出来的，必须在这里补可执行位，否则入口脚本无法 exec node。
-                    relativePath.endsWith(".sh", ignoreCase = true) ||
-                        relativePath == "tavern-entrypoint.sh" ||
-                        relativePath == "node/bin/node"
-                },
+                shouldSetExecutable = { relativePath -> relativePath.endsWith(".sh", ignoreCase = true) },
                 onProgress = { processedEntries, totalEntries ->
                     val nextProgress = (48 + ((processedEntries.toDouble() / totalEntries.toDouble()) * 20.0).toInt())
                         .coerceIn(lastServerProgress, 68)
@@ -271,18 +263,25 @@ internal class AssetExtractor(private val context: Context) {
                     targetPath = File(paths.serverDir, "bootstrap-manifest.json")
                 )
             )
-            onProgress(
-                "Tavern server 资产已准备完成。",
-                "server payload manifest 已同步完成。",
-                72
-            )
         } else {
             onProgress(
                 "Tavern server 资产已是最新。",
-                "跳过 Tavern payload 解包。",
-                72
+                "跳过 Tavern payload 解包，继续校正依赖包权限。",
+                68
             )
         }
+
+        onProgress(
+            "正在校正 Tavern server 权限。",
+            "正在执行通用 dependency post-extract hook。",
+            70
+        )
+        runServerPostExtractHook(paths)
+        onProgress(
+            "Tavern server 资产已准备完成。",
+            "server payload manifest 与依赖包权限已同步完成。",
+            72
+        )
 
         onProgress(
             "正在同步宿主内置扩展。",
@@ -418,6 +417,36 @@ internal class AssetExtractor(private val context: Context) {
             }
         }
         return totalEntries.coerceAtLeast(1)
+    }
+
+    private fun runServerPostExtractHook(paths: HostPaths) {
+        val hookFile = File(paths.serverDir, "dependency-post-extract.sh")
+        if (!hookFile.isFile) {
+            return
+        }
+
+        val process = ProcessBuilder("/system/bin/sh", hookFile.absolutePath)
+            .directory(paths.serverDir)
+            .redirectErrorStream(true)
+            .start()
+
+        val output = process.inputStream.bufferedReader().use { reader ->
+            reader.readText().trim()
+        }
+
+        if (!process.waitFor(30, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            throw BootstrapException("dependency post-extract hook 执行超时：${hookFile.absolutePath}")
+        }
+
+        if (process.exitValue() != 0) {
+            val details = if (output.isBlank()) {
+                "退出码 ${process.exitValue()}"
+            } else {
+                output
+            }
+            throw BootstrapException("dependency post-extract hook 执行失败：$details")
+        }
     }
 
     private fun installBundledHostExtensions(paths: HostPaths, replaceExisting: Boolean) {

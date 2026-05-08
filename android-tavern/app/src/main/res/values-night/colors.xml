@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="floating_logs_panel_background">#111827</color>
+    <color name="floating_logs_panel_stroke">#334155</color>
+    <color name="floating_logs_panel_title">#F8FAFC</color>
+    <color name="floating_logs_panel_secondary_text">#CBD5E1</color>
+    <color name="floating_logs_panel_surface">#1F2937</color>
+    <color name="floating_logs_panel_content">#E5E7EB</color>
+    <color name="floating_logs_bubble_background">#14B8A6</color>
+    <color name="floating_logs_bubble_stroke">#0F766E</color>
+    <color name="floating_logs_bubble_text">#F0FDFA</color>
+</resources>
