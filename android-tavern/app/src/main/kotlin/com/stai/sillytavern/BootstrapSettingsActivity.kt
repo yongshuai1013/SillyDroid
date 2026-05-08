@@ -31,6 +31,7 @@ import java.util.Locale
 class BootstrapSettingsActivity : AppCompatActivity() {
     companion object {
         private const val resultShouldStartKey = "bootstrap-settings.result.start"
+        private const val resultShouldReloadTavernUiKey = "bootstrap-settings.result.reload-tavern-ui"
 
         fun createIntent(activity: Activity): Intent {
             return Intent(activity, BootstrapSettingsActivity::class.java)
@@ -38,6 +39,10 @@ class BootstrapSettingsActivity : AppCompatActivity() {
 
         fun shouldStartBootstrap(data: Intent?): Boolean {
             return data?.getBooleanExtra(resultShouldStartKey, false) == true
+        }
+
+        fun shouldReloadTavernUi(data: Intent?): Boolean {
+            return data?.getBooleanExtra(resultShouldReloadTavernUiKey, false) == true
         }
     }
 
@@ -91,6 +96,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var extensionsCoordinator: BootstrapSettingsExtensionsCoordinator
     private lateinit var logsCoordinator: BootstrapSettingsLogsCoordinator
     private lateinit var appUpdateCoordinator: AppUpdateCoordinator
+    private var shouldStartBootstrap = false
+    private var shouldReloadTavernUi = false
 
     private val exportArchiveLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { targetUri ->
         if (targetUri != null) {
@@ -176,10 +183,6 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         }
 
         screenController.setBusy(true)
-        val currentPhase = StartupRuntimeStore.state.value.phase
-        if (currentPhase != StartupPhase.PAUSING && currentPhase != StartupPhase.CONFIGURING) {
-            startService(StartupCoordinatorService.createStopForSettingsIntent(this))
-        }
         settingsCoordinator.loadConfiguration()
     }
 
@@ -303,7 +306,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             formController = formController,
             screenController = screenController,
             onStartBootstrapConfirmed = {
-                setResult(Activity.RESULT_OK, Intent().putExtra(resultShouldStartKey, true))
+                updateResultFlags(shouldStartBootstrap = true)
                 finish()
             }
         )
@@ -318,7 +321,14 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             showDataError = settingsCoordinator::showValidationMessage,
             showBanner = { message -> screenController.showBanner(message) },
             showMessage = screenController::showMessage,
-            updateDirtyState = settingsCoordinator::refreshDirtyState
+            updateDirtyState = settingsCoordinator::refreshDirtyState,
+            onBootstrapRestartRequired = {
+                updateResultFlags(shouldStartBootstrap = true)
+                finish()
+            },
+            onTavernUiReloadRequired = {
+                updateResultFlags(shouldReloadTavernUi = true)
+            }
         )
         extensionsCoordinator = BootstrapSettingsExtensionsCoordinator(
             activity = this,
@@ -331,7 +341,10 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             setBusy = screenController::setBusy,
             showError = settingsCoordinator::showValidationMessage,
             showBanner = { message -> screenController.showBanner(message) },
-            showMessage = screenController::showMessage
+            showMessage = screenController::showMessage,
+            onTavernUiReloadRequired = {
+                updateResultFlags(shouldReloadTavernUi = true)
+            }
         )
         logsCoordinator = BootstrapSettingsLogsCoordinator(
             activity = this,
@@ -344,6 +357,20 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             showError = settingsCoordinator::showValidationMessage,
             showMessage = screenController::showMessage,
             requestExport = ::requestLogExport
+        )
+    }
+
+    private fun updateResultFlags(
+        shouldStartBootstrap: Boolean = this.shouldStartBootstrap,
+        shouldReloadTavernUi: Boolean = this.shouldReloadTavernUi
+    ) {
+        this.shouldStartBootstrap = this.shouldStartBootstrap || shouldStartBootstrap
+        this.shouldReloadTavernUi = this.shouldReloadTavernUi || shouldReloadTavernUi
+        setResult(
+            Activity.RESULT_OK,
+            Intent()
+                .putExtra(resultShouldStartKey, this.shouldStartBootstrap)
+                .putExtra(resultShouldReloadTavernUiKey, this.shouldReloadTavernUi)
         )
     }
 

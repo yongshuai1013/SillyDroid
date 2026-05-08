@@ -102,6 +102,7 @@ class MainActivity : AppCompatActivity() {
         private const val loadedUrlStateKey = "tavern.webview.loadedUrl"
         private const val webSessionBridgeName = "StaiWebSessionBridge"
         private const val systemNotificationBridgeName = "AndroidSystemNotificationBridge"
+        private const val androidHostBridgeName = "StaiAndroidHostBridge"
         private const val webSessionStoragePreferencesName = "stai-webview-session"
         private const val webSessionStorageSnapshotKey = "session-storage"
     }
@@ -162,7 +163,11 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        renderBootstrapState(StartupRuntimeStore.state.value)
+        val currentState = StartupRuntimeStore.state.value
+        renderBootstrapState(currentState)
+        if (result.resultCode == Activity.RESULT_OK && BootstrapSettingsActivity.shouldReloadTavernUi(result.data)) {
+            reloadTavernUiIfPossible(currentState)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -666,6 +671,8 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(BlobDownloadBridge(), downloadBridgeName)
         // 浏览器通知统一走宿主桥，避免 Android WebView 里再退回不可用的 Notification API。
         webView.addJavascriptInterface(SystemNotificationBridge(), systemNotificationBridgeName)
+        // 只暴露 Tavern 需要的最小宿主能力，给 Android 专属扩展调用设置页、日志悬浮球和版本信息。
+        webView.addJavascriptInterface(AndroidHostBridge(), androidHostBridgeName)
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val targetUri = request?.url ?: return false
@@ -1338,6 +1345,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private inner class AndroidHostBridge {
+        @JavascriptInterface
+        fun openSettings(): Boolean {
+            if (isFinishing || isDestroyed) {
+                return false
+            }
+
+            runOnUiThread {
+                openBootstrapSettings()
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun showFloatingLogsBubble(): Boolean {
+            if (isFinishing || isDestroyed) {
+                return false
+            }
+
+            runOnUiThread {
+                hostConfigStore.floatingLogBubbleEnabled = true
+                refreshFloatingLogsVisibility()
+                revealFloatingLogsBubble(animated = true)
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun getHostVersionInfo(): String {
+            return buildAndroidHostVersionInfoJson()
+        }
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return
@@ -1453,6 +1493,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun buildAndroidHostVersionInfoJson(): String {
+        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0)
+        }
+
+        return JSONObject()
+            .put("hostVersion", BuildConfig.STAI_HOST_VERSION)
+            .put("apkVersionName", packageInfo.versionName.orEmpty().trim())
+            .put("apkVersionCode", packageInfo.longVersionCode.toString())
+            .put("floatingLogBubbleEnabled", hostConfigStore.floatingLogBubbleEnabled)
+            .put("serverReady", StartupRuntimeStore.state.value.isReady)
+            .toString()
+    }
+
     private fun renderBootstrapState(state: StartupState) {
         val displayMessage = if (state.phase == StartupPhase.CONFIGURING) {
             getString(R.string.bootstrap_paused_message)
@@ -1530,6 +1587,14 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
+    private fun reloadTavernUiIfPossible(state: StartupState) {
+        if (!state.isReady || !webView.isVisible) {
+            return
+        }
+
+        webView.reload()
+    }
+
     private fun openBootstrapSettings() {
         if (isOpeningBootstrapSettings) {
             return
@@ -1537,17 +1602,6 @@ class MainActivity : AppCompatActivity() {
 
         isOpeningBootstrapSettings = true
         bootstrapSettingsButton.isEnabled = false
-        val localUrl = BootConfig.localServiceUrl(this)
-        StartupRuntimeStore.update(
-            StartupState(
-                phase = StartupPhase.PAUSING,
-                message = "正在暂停本地 Tavern 服务。",
-                details = "正在进入设置页并等待本地服务停止。",
-                localUrl = localUrl,
-                progressPercent = 0
-            )
-        )
-        startService(StartupCoordinatorService.createStopForSettingsIntent(this))
         bootstrapSettingsLauncher.launch(BootstrapSettingsActivity.createIntent(this))
     }
 

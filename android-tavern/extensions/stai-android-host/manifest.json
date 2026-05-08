@@ -1,0 +1,11 @@
+{
+  "display_name": "Android Host",
+  "loading_order": 25,
+  "version": "1.0.0",
+  "author": "ST.AI",
+  "js": "index.js",
+  "stai_bundle_category": "host",
+  "hooks": {
+    "activate": "activate"
+  }
+}

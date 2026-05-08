@@ -18,10 +18,8 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
@@ -39,7 +37,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
     private val setBusy: (Boolean) -> Unit,
     private val showError: (String) -> Unit,
     private val showBanner: (String) -> Unit,
-    private val showMessage: (String) -> Unit
+    private val showMessage: (String) -> Unit,
+    private val onTavernUiReloadRequired: () -> Unit
 ) {
     private data class ManagedExtension(
         val folderName: String,
@@ -51,6 +50,16 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val manifestMessage: String?
     )
 
+    private data class BundledExtension(
+        val folderName: String,
+        val displayName: String,
+        val version: String?,
+        val author: String?,
+        val sourceDirectory: File,
+        val category: String,
+        val targetExists: Boolean
+    )
+
     private data class ExtensionInstallPreview(
         val repositoryUrl: String,
         val folderName: String,
@@ -60,7 +69,24 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val homePage: String?,
         val tempDirectory: File,
         val previewFile: File,
-        val targetExists: Boolean
+        val targetExists: Boolean,
+        val previewLogPath: String
+    )
+
+    private data class BatchExtensionFailure(
+        val input: String,
+        val message: String,
+        val logPath: String?
+    )
+
+    private data class BatchExtensionPreview(
+        val previews: List<ExtensionInstallPreview>,
+        val failures: List<BatchExtensionFailure>
+    )
+
+    private data class BatchExtensionInstallResult(
+        val successes: List<ExtensionInstallPreview>,
+        val failures: List<BatchExtensionFailure>
     )
 
     private data class NormalizedExtensionRepository(
@@ -84,12 +110,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val indeterminate: Boolean
     )
 
-    private val stoppedPhases = setOf(
-        StartupPhase.CONFIGURING,
-        StartupPhase.IDLE,
-        StartupPhase.BLOCKED,
-        StartupPhase.ERROR
-    )
     private val paths by lazy { HostPaths.from(activity) }
     private val launcher by lazy { LinuxRuntimeLauncher(paths) }
     private val runtimeProvisioner by lazy { RootfsRuntimeProvisioner(launcher, paths) }
@@ -332,7 +352,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForMaintenance()
                     val targetDir = File(File(paths.serverDataDir, "extensions"), extension.folderName)
                     if (!targetDir.deleteRecursively() && targetDir.exists()) {
                         throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_delete_failed))
@@ -345,6 +364,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 val message = activity.getString(R.string.bootstrap_settings_extensions_delete_success, extension.displayName)
                 showBanner(message)
                 showMessage(message)
+                onTavernUiReloadRequired()
                 reloadExtensions()
             }.onFailure { exception ->
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_delete_failed))
@@ -373,7 +393,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForMaintenance()
                     runExtensionReinstall(
                         extension.folderName,
                         normalizedRepository,
@@ -393,6 +412,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 val message = activity.getString(R.string.bootstrap_settings_extensions_reinstall_success, extension.displayName)
                 showBanner(message)
                 showMessage(message)
+                onTavernUiReloadRequired()
                 reloadExtensions()
             }.onFailure { exception ->
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
@@ -406,6 +426,37 @@ internal class BootstrapSettingsExtensionsCoordinator(
             return
         }
 
+        val bundledExtensions = loadBundledExtensions()
+        val defaultBundledExtensions = bundledExtensions.filterNot { extension ->
+            extension.category.equals("host", ignoreCase = true)
+        }
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+        if (defaultBundledExtensions.isNotEmpty()) {
+            actions += activity.getString(R.string.bootstrap_settings_extensions_action_install_default) to {
+                promptInstallBundledExtension(defaultBundledExtensions)
+            }
+        }
+        actions += activity.getString(R.string.bootstrap_settings_extensions_action_install_repository) to {
+            promptInstallRepositoryExtension()
+        }
+        actions += activity.getString(R.string.bootstrap_settings_extensions_action_cleanup_broken) to {
+            promptCleanupBrokenExtensions()
+        }
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_manage_title)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
+                actions[which].second.invoke()
+            }
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .show()
+    }
+
+    private fun promptInstallRepositoryExtension() {
+        if (busy) {
+            return
+        }
+
         val inputLayout = TextInputLayout(activity).apply {
             hint = activity.getString(R.string.bootstrap_settings_extensions_install_prompt_hint)
             layoutParams = LayoutParams(
@@ -414,8 +465,10 @@ internal class BootstrapSettingsExtensionsCoordinator(
             )
         }
         val inputView = TextInputEditText(activity).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setSingleLine(false)
+            minLines = 4
+            maxLines = 8
             minHeight = dp(44)
         }
         inputLayout.addView(inputView)
@@ -429,19 +482,220 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
         dialog.setOnShowListener {
             dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val repositoryUrl = inputView.text?.toString().orEmpty().trim()
-                val normalizedRepository = normalizeRepositoryUrl(repositoryUrl)
-                if (normalizedRepository == null) {
-                    inputLayout.error = activity.getString(R.string.bootstrap_settings_extensions_install_invalid_url)
+                val repositoryUrls = parseRepositoryUrls(inputView.text?.toString().orEmpty())
+                if (repositoryUrls.isEmpty()) {
+                    inputLayout.error = activity.getString(R.string.bootstrap_settings_extensions_install_empty)
                     return@setOnClickListener
                 }
 
                 inputLayout.error = null
                 dialog.dismiss()
-                previewInstallExtension(repositoryUrl, normalizedRepository)
+                if (repositoryUrls.size == 1) {
+                    val repositoryUrl = repositoryUrls.single()
+                    val normalizedRepository = normalizeRepositoryUrl(repositoryUrl)
+                    if (normalizedRepository == null) {
+                        showError(activity.getString(R.string.bootstrap_settings_extensions_install_invalid_url))
+                        return@setOnClickListener
+                    }
+
+                    previewInstallExtension(repositoryUrl, normalizedRepository)
+                    return@setOnClickListener
+                }
+
+                previewInstallExtensionsBatch(repositoryUrls)
             }
         }
         dialog.show()
+    }
+
+    private fun promptInstallBundledExtension(bundledExtensions: List<BundledExtension>) {
+        if (bundledExtensions.isEmpty()) {
+            showMessage(activity.getString(R.string.bootstrap_settings_extensions_default_empty))
+            return
+        }
+
+        val labels = bundledExtensions.map { extension ->
+            buildString {
+                append(extension.displayName)
+                extension.version?.takeIf { it.isNotBlank() }?.let { version ->
+                    append(" | ")
+                    append(version)
+                }
+                append(" | ")
+                append(
+                    if (extension.targetExists) {
+                        activity.getString(R.string.bootstrap_settings_extensions_default_installed)
+                    } else {
+                        activity.getString(R.string.bootstrap_settings_extensions_default_not_installed)
+                    }
+                )
+            }
+        }.toTypedArray()
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_default_title)
+            .setItems(labels) { _, which ->
+                confirmInstallBundledExtension(bundledExtensions[which])
+            }
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .show()
+    }
+
+    private fun promptCleanupBrokenExtensions() {
+        if (busy) {
+            return
+        }
+
+        val brokenDirectories = findBrokenExtensionDirectories()
+        if (brokenDirectories.isEmpty()) {
+            showMessage(activity.getString(R.string.bootstrap_settings_extensions_cleanup_broken_empty))
+            return
+        }
+
+        val directoryLines = brokenDirectories.joinToString(separator = "\n") { directory ->
+            "- ${directory.name}"
+        }
+        val message = activity.getString(
+            R.string.bootstrap_settings_extensions_cleanup_broken_confirm_message,
+            brokenDirectories.size,
+            directoryLines
+        )
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_cleanup_broken_confirm_title)
+            .setMessage(message)
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_action_cleanup_broken) { _, _ ->
+                cleanupBrokenExtensions(brokenDirectories)
+            }
+            .show()
+    }
+
+    private fun confirmInstallBundledExtension(extension: BundledExtension) {
+        val versionLabel = extension.version ?: activity.getString(R.string.bootstrap_settings_extensions_version_unknown)
+        val authorLabel = extension.author ?: activity.getString(R.string.bootstrap_settings_extensions_author_unknown)
+        val message = if (extension.targetExists) {
+            activity.getString(
+                R.string.bootstrap_settings_extensions_default_confirm_message_overwrite,
+                extension.displayName,
+                versionLabel,
+                authorLabel,
+                extension.folderName
+            )
+        } else {
+            activity.getString(
+                R.string.bootstrap_settings_extensions_default_confirm_message_new,
+                extension.displayName,
+                versionLabel,
+                authorLabel,
+                extension.folderName
+            )
+        }
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_default_confirm_title)
+            .setMessage(message)
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_install) { _, _ ->
+                installBundledExtension(extension)
+            }
+            .show()
+    }
+
+    private fun installBundledExtension(extension: BundledExtension) {
+        activity.lifecycleScope.launch {
+            setProgressState(
+                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_install),
+                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_updating),
+                percent = null,
+                indeterminate = true
+            )
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val extensionsRoot = File(paths.serverDataDir, "extensions")
+                    val targetDirectory = File(extensionsRoot, extension.folderName)
+                    extensionsRoot.mkdirs()
+                    if (targetDirectory.exists()) {
+                        targetDirectory.deleteRecursively()
+                    }
+                    if (!extension.sourceDirectory.copyRecursively(targetDirectory, overwrite = true)) {
+                        throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_install_failed))
+                    }
+                }
+            }
+            setBusyState(false)
+            clearProgressState()
+
+            result.onSuccess {
+                val message = activity.getString(R.string.bootstrap_settings_extensions_install_success, extension.displayName)
+                showBanner(message)
+                showMessage(message)
+                onTavernUiReloadRequired()
+                reloadExtensions()
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_install_failed))
+                reloadExtensions()
+            }
+        }
+    }
+
+    private fun previewInstallExtensionsBatch(repositoryUrls: List<String>) {
+        activity.lifecycleScope.launch {
+            setProgressState(
+                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_preview),
+                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_batch_preview_stage, repositoryUrls.size),
+                percent = null,
+                indeterminate = true
+            )
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val previews = mutableListOf<ExtensionInstallPreview>()
+                    val failures = mutableListOf<BatchExtensionFailure>()
+                    repositoryUrls.forEach { repositoryUrl ->
+                        val normalizedRepository = normalizeRepositoryUrl(repositoryUrl)
+                        if (normalizedRepository == null) {
+                            failures += BatchExtensionFailure(
+                                input = repositoryUrl,
+                                message = activity.getString(R.string.bootstrap_settings_extensions_install_invalid_url),
+                                logPath = null
+                            )
+                            return@forEach
+                        }
+
+                        runCatching {
+                            runExtensionInstallPreview(repositoryUrl, normalizedRepository)
+                        }.onSuccess { preview ->
+                            previews += preview
+                        }.onFailure { exception ->
+                            failures += toBatchExtensionFailure(
+                                input = repositoryUrl,
+                                fallbackMessage = activity.getString(R.string.bootstrap_settings_extensions_install_failed),
+                                exceptionMessage = exception.message
+                            )
+                        }
+                    }
+                    BatchExtensionPreview(previews = previews, failures = failures)
+                }
+            }
+            setBusyState(false)
+            clearProgressState()
+
+            result.onSuccess { batchPreview ->
+                if (batchPreview.previews.isEmpty()) {
+                    showDetailedBatchInstallResult(
+                        details = buildBatchInstallMessage(emptyList(), batchPreview.failures),
+                        isError = true
+                    )
+                    return@onSuccess
+                }
+
+                confirmBatchInstallPreview(batchPreview)
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_install_failed))
+            }
+        }
     }
 
     private fun previewInstallExtension(repositoryUrl: String, normalizedRepository: NormalizedExtensionRepository) {
@@ -455,7 +709,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForMaintenance()
                     runExtensionInstallPreview(
                         repositoryUrl,
                         normalizedRepository,
@@ -517,6 +770,54 @@ internal class BootstrapSettingsExtensionsCoordinator(
             .show()
     }
 
+    private fun confirmBatchInstallPreview(batchPreview: BatchExtensionPreview) {
+        var confirmed = false
+        val successLines = batchPreview.previews.joinToString(separator = "\n") { preview ->
+            val targetLabel = if (preview.targetExists) {
+                activity.getString(R.string.bootstrap_settings_extensions_batch_target_overwrite, preview.folderName)
+            } else {
+                activity.getString(R.string.bootstrap_settings_extensions_batch_target_new, preview.folderName)
+            }
+            "- ${preview.displayName} (${targetLabel})"
+        }
+        val failureLines = batchPreview.failures.joinToString(separator = "\n") { failure ->
+            "- ${failure.input}: ${failure.message}"
+        }
+
+        val message = buildString {
+            append(
+                activity.getString(
+                    R.string.bootstrap_settings_extensions_batch_confirm_summary,
+                    batchPreview.previews.size,
+                    batchPreview.failures.size
+                )
+            )
+            append("\n\n")
+            append(successLines)
+            if (failureLines.isNotBlank()) {
+                append("\n\n")
+                append(activity.getString(R.string.bootstrap_settings_extensions_batch_confirm_failures))
+                append("\n")
+                append(failureLines)
+            }
+        }
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_batch_confirm_title)
+            .setMessage(message)
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_install) { _, _ ->
+                confirmed = true
+                installPreviewedExtensionsBatch(batchPreview)
+            }
+            .setOnDismissListener {
+                if (!confirmed) {
+                    batchPreview.previews.forEach(::cleanupInstallPreview)
+                }
+            }
+            .show()
+    }
+
     private fun installPreviewedExtension(preview: ExtensionInstallPreview) {
         activity.lifecycleScope.launch {
             setProgressState(
@@ -528,7 +829,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForMaintenance()
                     finalizeInstallPreview(preview)
                 }
             }
@@ -539,6 +839,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 val message = activity.getString(R.string.bootstrap_settings_extensions_install_success, preview.displayName)
                 showBanner(message)
                 showMessage(message)
+                onTavernUiReloadRequired()
                 reloadExtensions()
             }.onFailure { exception ->
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_install_failed))
@@ -547,21 +848,58 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
     }
 
-    private suspend fun stopServiceForMaintenance() {
-        if (StartupRuntimeStore.state.value.phase !in stoppedPhases) {
-            withContext(Dispatchers.Main.immediate) {
-                activity.startService(StartupCoordinatorService.createStopForSettingsIntent(activity))
+    private fun installPreviewedExtensionsBatch(batchPreview: BatchExtensionPreview) {
+        activity.lifecycleScope.launch {
+            setProgressState(
+                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_install),
+                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_batch_install_stage, batchPreview.previews.size),
+                percent = null,
+                indeterminate = true
+            )
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val successes = mutableListOf<ExtensionInstallPreview>()
+                    val failures = batchPreview.failures.toMutableList()
+                    batchPreview.previews.forEach { preview ->
+                        runCatching {
+                            finalizeInstallPreview(preview)
+                        }.onSuccess {
+                            successes += preview
+                        }.onFailure { exception ->
+                            failures += toBatchExtensionFailure(
+                                input = preview.repositoryUrl,
+                                fallbackMessage = activity.getString(R.string.bootstrap_settings_extensions_install_failed),
+                                exceptionMessage = exception.message,
+                                fallbackLogPath = preview.previewLogPath
+                            )
+                        }
+                    }
+                    BatchExtensionInstallResult(successes = successes, failures = failures)
+                }
             }
-        }
+            setBusyState(false)
+            clearProgressState()
 
-        val stoppedState = withTimeoutOrNull(5000) {
-            StartupRuntimeStore.state.first { state ->
-                state.phase in stoppedPhases
+            result.onSuccess { installResult ->
+                val summary = activity.getString(
+                    R.string.bootstrap_settings_extensions_batch_result_summary,
+                    installResult.successes.size,
+                    installResult.failures.size
+                )
+                val details = buildBatchInstallMessage(installResult.successes, installResult.failures)
+                if (installResult.successes.isNotEmpty()) {
+                    showBanner(summary)
+                    showDetailedBatchInstallResult(details = details)
+                    onTavernUiReloadRequired()
+                } else {
+                    showDetailedBatchInstallResult(details = details, isError = true)
+                }
+                reloadExtensions()
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_install_failed))
+                reloadExtensions()
             }
-        }
-
-        if (stoppedState == null) {
-            throw BootstrapException(activity.getString(R.string.bootstrap_settings_import_stop_timeout))
         }
     }
 
@@ -718,7 +1056,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
             homePage = previewJson.optString("homePage").ifBlank { null },
             tempDirectory = previewTempDir,
             previewFile = previewHostFile,
-            targetExists = targetExists
+            targetExists = targetExists,
+            previewLogPath = logPath
         )
     }
 
@@ -758,6 +1097,206 @@ internal class BootstrapSettingsExtensionsCoordinator(
             preview.previewFile.delete()
             preview.tempDirectory.deleteRecursively()
         }
+    }
+
+    private fun cleanupBrokenExtensions(directories: List<File>) {
+        activity.lifecycleScope.launch {
+            setProgressState(
+                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_action_cleanup_broken),
+                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_updating),
+                percent = null,
+                indeterminate = true
+            )
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val removed = mutableListOf<String>()
+                    val failed = mutableListOf<String>()
+                    directories.forEach { directory ->
+                        if (!directory.exists() || directory.deleteRecursively()) {
+                            removed += directory.name
+                        } else {
+                            failed += directory.name
+                        }
+                    }
+                    removed to failed
+                }
+            }
+            setBusyState(false)
+            clearProgressState()
+
+            result.onSuccess { (removed, failed) ->
+                val summary = activity.getString(
+                    R.string.bootstrap_settings_extensions_cleanup_broken_result,
+                    removed.size,
+                    failed.size
+                )
+                val details = buildString {
+                    append(summary)
+                    if (removed.isNotEmpty()) {
+                        append("\n")
+                        append(removed.joinToString(separator = "\n") { folderName -> "- $folderName" })
+                    }
+                    if (failed.isNotEmpty()) {
+                        append("\n")
+                        append(failed.joinToString(separator = "\n") { folderName -> "- $folderName" })
+                    }
+                }
+                if (removed.isNotEmpty()) {
+                    showBanner(summary)
+                    showMessage(details)
+                    onTavernUiReloadRequired()
+                } else {
+                    showError(details)
+                }
+                reloadExtensions()
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_cleanup_broken_failed))
+                reloadExtensions()
+            }
+        }
+    }
+
+    private fun loadBundledExtensions(): List<BundledExtension> {
+        val bundledRoot = File(paths.bootstrapRoot, "server/bundled-extensions")
+        if (!bundledRoot.isDirectory) {
+            return emptyList()
+        }
+
+        val targetRoot = File(paths.serverDataDir, "extensions")
+        return bundledRoot.listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .mapNotNull { directory ->
+                val manifestFile = File(directory, "manifest.json")
+                if (!manifestFile.isFile) {
+                    return@mapNotNull null
+                }
+
+                runCatching {
+                    val manifest = JSONObject(manifestFile.readText())
+                    BundledExtension(
+                        folderName = directory.name,
+                        displayName = manifest.optString("display_name").ifBlank { directory.name },
+                        version = manifest.optString("version").ifBlank { null },
+                        author = manifest.optString("author").ifBlank { null },
+                        sourceDirectory = directory,
+                        category = manifest.optString("stai_bundle_category").ifBlank { "default" },
+                        targetExists = File(targetRoot, directory.name).exists()
+                    )
+                }.getOrNull()
+            }
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName })
+    }
+
+    private fun findBrokenExtensionDirectories(): List<File> {
+        val extensionsRoot = File(paths.serverDataDir, "extensions")
+        if (!extensionsRoot.isDirectory) {
+            return emptyList()
+        }
+
+        return extensionsRoot.listFiles()
+            .orEmpty()
+            .filter { directory -> directory.isDirectory && !File(directory, "manifest.json").isFile }
+            .sortedBy { directory -> directory.name.lowercase() }
+    }
+
+    private fun parseRepositoryUrls(rawInput: String): List<String> {
+        return rawInput.lineSequence()
+            .map { line -> line.trim() }
+            .filter { line -> line.isNotEmpty() }
+            .toList()
+    }
+
+    private fun buildBatchInstallMessage(
+        successes: List<ExtensionInstallPreview>,
+        failures: List<BatchExtensionFailure>
+    ): String {
+        return buildString {
+            append(
+                activity.getString(
+                    R.string.bootstrap_settings_extensions_batch_result_summary,
+                    successes.size,
+                    failures.size
+                )
+            )
+
+            if (successes.isNotEmpty()) {
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_successes))
+                append("\n")
+                append(successes.joinToString(separator = "\n\n") { preview ->
+                    buildString {
+                        append("- ")
+                        append(preview.displayName)
+                        append(" -> ")
+                        append(preview.folderName)
+                        append("\n")
+                        append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_source, preview.repositoryUrl))
+                        append("\n")
+                        append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_log, preview.previewLogPath))
+                    }
+                })
+            }
+
+            if (failures.isNotEmpty()) {
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_failures))
+                append("\n")
+                append(failures.joinToString(separator = "\n\n") { failure ->
+                    buildString {
+                        append("- ")
+                        append(failure.input)
+                        append(": ")
+                        append(failure.message)
+                        failure.logPath?.let { logPath ->
+                            append("\n")
+                            append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_log, logPath))
+                        }
+                    }
+                })
+            }
+        }
+    }
+
+    private fun showDetailedBatchInstallResult(details: String, isError: Boolean = false) {
+        if (isError) {
+            showError(activity.getString(R.string.bootstrap_settings_extensions_batch_result_error_banner))
+        }
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_batch_result_title)
+            .setMessage(details)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun toBatchExtensionFailure(
+        input: String,
+        fallbackMessage: String,
+        exceptionMessage: String?,
+        fallbackLogPath: String? = null
+    ): BatchExtensionFailure {
+        val rawMessage = exceptionMessage?.trim().orEmpty()
+        val logPath = extractLogPath(rawMessage) ?: fallbackLogPath
+        val message = rawMessage
+            .replace(Regex("[\\s，,;；。]*日志[:：]\\s*[^\\r\\n]+"), "")
+            .trim()
+            .ifBlank { fallbackMessage }
+        return BatchExtensionFailure(
+            input = input,
+            message = message,
+            logPath = logPath
+        )
+    }
+
+    private fun extractLogPath(message: String): String? {
+        return Regex("日志[:：]\\s*([^\\r\\n]+)")
+            .find(message)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.ifBlank { null }
     }
 
     private fun isSupportedRepositoryUrl(repositoryUrl: String): Boolean {

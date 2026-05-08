@@ -21,8 +21,16 @@ internal class BootstrapSettingsDataCoordinator(
     private val showDataError: (String) -> Unit,
     private val showBanner: (String) -> Unit,
     private val showMessage: (String) -> Unit,
-    private val updateDirtyState: () -> Unit
+    private val updateDirtyState: () -> Unit,
+    private val onBootstrapRestartRequired: () -> Unit,
+    private val onTavernUiReloadRequired: () -> Unit
 ) {
+    private data class ImportArchiveOutcome(
+        val importResult: TavernDataImportResult,
+        val importedPort: Int,
+        val loadedConfig: LoadedTavernConfig
+    )
+
     private val stoppedPhases = setOf(
         StartupPhase.CONFIGURING,
         StartupPhase.IDLE,
@@ -66,20 +74,38 @@ internal class BootstrapSettingsDataCoordinator(
             val previousPort = hostConfigStore.servicePort
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForImport()
+                    if (preview.archiveKind == TavernDataArchiveKind.HOST_FULL_SNAPSHOT) {
+                        stopServiceForImport()
+                    }
                     val importResult = archiveManager.importDataArchive(sourceUri)
                     val loadedConfig = configRepository.loadConfig()
                     val importedPort = configRepository.readConfiguredPort(loadedConfig.root)
-                    Triple(importResult, importedPort, loadedConfig)
+                    ImportArchiveOutcome(importResult, importedPort, loadedConfig)
                 }
             }
             setBusy(false)
 
-            result.onSuccess { (importResult, importedPort, loadedConfig) ->
-                replaceLoadedConfiguration(
-                    loadedConfig,
-                    buildImportMessage(preview, importResult, previousPort, importedPort)
+            result.onSuccess { outcome ->
+                val successMessage = buildImportMessage(
+                    preview,
+                    outcome.importResult,
+                    previousPort,
+                    outcome.importedPort
                 )
+                replaceLoadedConfiguration(
+                    outcome.loadedConfig,
+                    successMessage
+                )
+                when (outcome.importResult.archiveKind) {
+                    TavernDataArchiveKind.USER_BACKUP -> {
+                        onTavernUiReloadRequired()
+                    }
+
+                    TavernDataArchiveKind.HOST_FULL_SNAPSHOT -> {
+                        showMessage(successMessage)
+                        onBootstrapRestartRequired()
+                    }
+                }
             }.onFailure { exception ->
                 showDataError(exception.message ?: activity.getString(R.string.bootstrap_settings_import_failed))
             }

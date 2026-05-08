@@ -30,6 +30,7 @@ internal class AppUpdateStateStore(context: Context) {
         private const val preferencesName = "app-update-state"
         private const val availableReleaseKey = "available-release"
         private const val downloadStateKey = "download-state"
+        private const val checkErrorMessageKey = "check-error-message"
     }
 
     private val preferences = context.applicationContext.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
@@ -54,6 +55,18 @@ internal class AppUpdateStateStore(context: Context) {
                     remove(downloadStateKey)
                 } else {
                     putString(downloadStateKey, encodeDownloadState(value))
+                }
+            }.apply()
+        }
+
+    var checkErrorMessage: String?
+        get() = preferences.getString(checkErrorMessageKey, null)?.trim()?.ifBlank { null }
+        set(value) {
+            preferences.edit().apply {
+                if (value.isNullOrBlank()) {
+                    remove(checkErrorMessageKey)
+                } else {
+                    putString(checkErrorMessageKey, value)
                 }
             }.apply()
         }

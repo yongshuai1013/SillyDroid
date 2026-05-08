@@ -9,6 +9,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/.." && pwd)"
 target_root="$workspace_root/artifacts/validation/android-tavern-server-package/$runtime_rid"
 working_root="$workspace_root/artifacts/tmp/android-tavern-bootstrap"
+server_overlay_root="$workspace_root/android-tavern/server-overlay"
+extensions_source_root="$workspace_root/android-tavern/extensions"
 
 source_android_build_common() {
     local common_script="$workspace_root/scripts/android-build-common.sh"
@@ -130,6 +132,15 @@ stai_assert_path_exists "$resolved_source_root/package.json" "SillyTavern 源码
 
 cp -R "$resolved_source_root/." "$payload_root/"
 rm -rf "$payload_root/data" "$payload_root/backups"
+
+if [[ -d "$server_overlay_root" ]]; then
+    cp -R "$server_overlay_root/." "$payload_root/"
+fi
+
+if [[ -d "$extensions_source_root" ]]; then
+    mkdir -p "$payload_root/bundled-extensions"
+    cp -R "$extensions_source_root/." "$payload_root/bundled-extensions/"
+fi
 
 node_extract_root="$resolved_working_root/node-runtime"
 rm -rf "$node_extract_root"

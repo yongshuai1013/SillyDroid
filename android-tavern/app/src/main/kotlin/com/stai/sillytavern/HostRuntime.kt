@@ -6,11 +6,13 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.io.copyRecursively
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 
 internal object BootConfig {
     const val defaultServicePort = 7888
@@ -283,6 +285,13 @@ internal class AssetExtractor(private val context: Context) {
         }
 
         onProgress(
+            "正在同步宿主内置扩展。",
+            "正在把解压后的 host 扩展安装到用户 extensions 目录。",
+            74
+        )
+        installBundledHostExtensions(paths, replaceExisting = serverDirectoryRefreshed)
+
+        onProgress(
             "正在同步启动脚本。",
             "正在写入 bootstrap 脚本与宿主资源目录。",
             76
@@ -409,6 +418,42 @@ internal class AssetExtractor(private val context: Context) {
             }
         }
         return totalEntries.coerceAtLeast(1)
+    }
+
+    private fun installBundledHostExtensions(paths: HostPaths, replaceExisting: Boolean) {
+        val bundledExtensionsRoot = File(paths.serverDir, "bundled-extensions")
+        if (!bundledExtensionsRoot.isDirectory) {
+            return
+        }
+
+        val targetExtensionsRoot = File(paths.serverDataDir, "extensions")
+        targetExtensionsRoot.mkdirs()
+
+        bundledExtensionsRoot.listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .filter { sourceDirectory ->
+                val manifestFile = File(sourceDirectory, "manifest.json")
+                if (!manifestFile.isFile) {
+                    return@filter false
+                }
+
+                runCatching {
+                    JSONObject(manifestFile.readText()).optString("stai_bundle_category")
+                }.getOrNull().equals("host", ignoreCase = true)
+            }
+            .forEach { sourceDirectory ->
+                val targetDirectory = File(targetExtensionsRoot, sourceDirectory.name)
+                if (targetDirectory.exists() && !replaceExisting) {
+                    return@forEach
+                }
+
+                if (targetDirectory.exists()) {
+                    targetDirectory.deleteRecursively()
+                }
+
+                sourceDirectory.copyRecursively(targetDirectory, overwrite = true)
+            }
     }
 
     private fun copyNode(spec: AssetCopySpec, skippedAssetRoots: Set<String>) {

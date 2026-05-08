@@ -171,6 +171,7 @@ internal class AppUpdateCoordinator(
         }
 
         result.onSuccess { release ->
+            stateStore.checkErrorMessage = null
             if (release == null) {
                 if (stateStore.downloadState == null) {
                     stateStore.availableRelease = null
@@ -179,9 +180,11 @@ internal class AppUpdateCoordinator(
                 stateStore.availableRelease = release
             }
             renderState()
-        }.onFailure {
+        }.onFailure { exception ->
+            val errorMessage = formatUpdateCheckError(exception)
+            stateStore.checkErrorMessage = errorMessage
             if (!silent) {
-                showMessage(R.string.app_update_check_failed)
+                showMessage(activity.getString(R.string.app_update_check_failed_with_reason, errorMessage))
             }
             renderState()
         }
@@ -431,6 +434,7 @@ internal class AppUpdateCoordinator(
 
         aboutUi?.let { ui ->
             val aboutVersionInfo = resolveAboutVersionInfo()
+            val checkErrorMessage = stateStore.checkErrorMessage
             ui.versionView.text = activity.getString(
                 R.string.bootstrap_settings_about_version_value,
                 aboutVersionInfo.apkVersionName,
@@ -469,6 +473,15 @@ internal class AppUpdateCoordinator(
                         availableRelease.versionName
                     )
                     actionText = activity.getString(R.string.bootstrap_settings_about_update_action_download)
+                    actionEnabled = true
+                }
+
+                !checkErrorMessage.isNullOrBlank() -> {
+                    statusText = activity.getString(
+                        R.string.bootstrap_settings_about_update_status_failed,
+                        checkErrorMessage
+                    )
+                    actionText = activity.getString(R.string.bootstrap_settings_about_update_action_check)
                     actionEnabled = true
                 }
 
@@ -560,6 +573,20 @@ internal class AppUpdateCoordinator(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun formatUpdateCheckError(exception: Throwable): String {
+        val rawMessage = exception.message.orEmpty().trim()
+        if (rawMessage.isBlank()) {
+            return activity.getString(R.string.app_update_check_failed_unknown_reason)
+        }
+
+        return rawMessage
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?.take(240)
+            ?: activity.getString(R.string.app_update_check_failed_unknown_reason)
     }
 
     private fun findAssetBySuffix(assets: JSONArray, suffix: String): JSONObject? {
@@ -697,5 +724,9 @@ internal class AppUpdateCoordinator(
 
     private fun showMessage(stringResId: Int) {
         Toast.makeText(activity, stringResId, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showMessage(message: String) {
+        Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
     }
 }
