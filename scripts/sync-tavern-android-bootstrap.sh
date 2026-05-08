@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${STAI_TAVERN_TAG:=1.18.0}"
-
 runtime_rid="linux-arm64"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,6 +9,77 @@ target_root="$workspace_root/artifacts/validation/android-tavern-server-package/
 working_root="$workspace_root/artifacts/tmp/android-tavern-bootstrap"
 server_overlay_root="$workspace_root/android-tavern/server-overlay"
 extensions_source_root="$workspace_root/android-tavern/extensions"
+build_config_path="$workspace_root/stai-build-config.json"
+
+read_build_config_value() {
+    local key_path="$1"
+    local default_value="$2"
+
+    if [[ ! -f "$build_config_path" ]] || ! command -v python3 >/dev/null 2>&1; then
+        printf '%s\n' "$default_value"
+        return
+    fi
+
+    python3 - "$build_config_path" "$key_path" "$default_value" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+key_path = sys.argv[2]
+default_value = sys.argv[3]
+
+try:
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    print(default_value)
+    raise SystemExit(0)
+
+current = data
+for part in key_path.split('.'):
+    if isinstance(current, dict) and part in current:
+        current = current[part]
+    else:
+        current = default_value
+        break
+
+if current is None:
+    current = default_value
+elif isinstance(current, bool):
+    current = 'true' if current else 'false'
+elif not isinstance(current, (str, int, float)):
+    current = default_value
+
+print(str(current))
+PY
+}
+
+resolve_latest_tavern_tag() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo '缺少 python3，无法自动解析最新 SillyTavern release tag。' >&2
+        exit 1
+    fi
+
+    python3 - <<'PY'
+import json
+import sys
+import urllib.request
+
+request = urllib.request.Request(
+    'https://api.github.com/repos/SillyTavern/SillyTavern/releases/latest',
+    headers={'User-Agent': 'STAI-Android-Build'}
+)
+with urllib.request.urlopen(request) as response:
+    payload = json.load(response)
+
+tag_name = (payload.get('tag_name') or '').strip()
+if not tag_name:
+    print('无法解析最新 SillyTavern release tag。', file=sys.stderr)
+    raise SystemExit(1)
+
+print(tag_name)
+PY
+}
 
 source_android_build_common() {
     local common_script="$workspace_root/scripts/android-build-common.sh"
@@ -25,6 +94,10 @@ source_android_build_common
 usage() {
     cat <<'EOF'
 Usage: sync-tavern-android-bootstrap.sh [--tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--target-root <path>] [--working-root <path>]
+
+说明：
+- 未传 --tag 时优先读取仓库根目录 stai-build-config.json 的 build.tavernVersion。
+- build.tavernVersion 为 latest 或 auto 时，会自动解析上游最新 GitHub Release tag。
 EOF
 }
 
@@ -57,6 +130,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+configured_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')"
+
+if [[ -z "${STAI_TAVERN_TAG:-}" ]]; then
+    STAI_TAVERN_TAG="$configured_tavern_tag"
+fi
+
+case "${STAI_TAVERN_TAG,,}" in
+    ''|auto|latest)
+        STAI_TAVERN_TAG="$(resolve_latest_tavern_tag)"
+        ;;
+esac
 
 case "$runtime_rid" in
     linux-arm64)
@@ -140,6 +225,11 @@ fi
 if [[ -d "$extensions_source_root" ]]; then
     mkdir -p "$payload_root/bundled-extensions"
     cp -R "$extensions_source_root/." "$payload_root/bundled-extensions/"
+fi
+
+if [[ -f "$build_config_path" ]]; then
+    mkdir -p "$payload_root/bundled-extensions"
+    cp -f "$build_config_path" "$payload_root/bundled-extensions/stai-build-config.json"
 fi
 
 node_extract_root="$resolved_working_root/node-runtime"

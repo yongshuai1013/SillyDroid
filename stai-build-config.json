@@ -1,0 +1,28 @@
+{
+  "build": {
+    "tavernVersion": "latest",
+    "buildType": "release"
+  },
+  "defaultExtensionRepositories": [
+    {
+      "displayName": "ST Prompt Template",
+      "repositoryUrl": "https://github.com/zonde306/ST-Prompt-Template",
+      "description": "Prompt template presets"
+    },
+    {
+      "displayName": "JS Slash Runner",
+      "repositoryUrl": "https://github.com/n0vi028/JS-Slash-Runner",
+      "description": "Slash command JavaScript runner"
+    },
+    {
+      "displayName": "LittleWhiteBox",
+      "repositoryUrl": "https://github.com/RT15548/LittleWhiteBox",
+      "description": "Workflow and utility toolbox"
+    },
+    {
+      "displayName": "Silly Tavern Reminder",
+      "repositoryUrl": "https://github.com/Mooooooon/silly-tavern-reminder",
+      "description": "Reminder extension"
+    }
+  ]
+}

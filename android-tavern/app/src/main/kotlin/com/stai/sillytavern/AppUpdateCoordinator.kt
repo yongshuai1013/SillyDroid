@@ -435,15 +435,19 @@ internal class AppUpdateCoordinator(
         aboutUi?.let { ui ->
             val aboutVersionInfo = resolveAboutVersionInfo()
             val checkErrorMessage = stateStore.checkErrorMessage
-            ui.versionView.text = activity.getString(
-                R.string.bootstrap_settings_about_version_value,
-                aboutVersionInfo.apkVersionName,
-                aboutVersionInfo.apkVersionCode,
-                BuildConfig.STAI_HOST_VERSION,
-                aboutVersionInfo.runtimeVersion,
-                aboutVersionInfo.serverPayloadVersion,
-                BuildConfig.BUILD_TYPE.uppercase(Locale.US)
-            )
+            ui.versionView.text = buildString {
+                append(activity.getString(R.string.bootstrap_settings_about_version_apk, aboutVersionInfo.apkVersionName))
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_about_version_code, aboutVersionInfo.apkVersionCode))
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_about_version_host, BuildConfig.STAI_HOST_VERSION))
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_about_version_runtime, aboutVersionInfo.runtimeVersion))
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_about_version_payload, aboutVersionInfo.serverPayloadVersion))
+                append("\n")
+                append(activity.getString(R.string.bootstrap_settings_about_version_build, BuildConfig.BUILD_TYPE.uppercase(Locale.US)))
+            }
 
             val statusText: String
             val actionText: String

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 runtime_rid='linux-arm64'
-build_type='debug'
+build_type=''
 runtime_image_path=''
 server_package_path=''
 tavern_tag=''
@@ -14,6 +14,50 @@ workspace_root="$(cd "$script_dir/.." && pwd)"
 android_root="$workspace_root/android-tavern"
 sync_server_script="$workspace_root/scripts/sync-tavern-android-bootstrap.sh"
 runtime_image_script="$workspace_root/scripts/build-tavern-android-runtime-image.sh"
+build_config_path="$workspace_root/stai-build-config.json"
+
+read_build_config_value() {
+    local key_path="$1"
+    local default_value="$2"
+
+    if [[ ! -f "$build_config_path" ]] || ! command -v python3 >/dev/null 2>&1; then
+        printf '%s\n' "$default_value"
+        return
+    fi
+
+    python3 - "$build_config_path" "$key_path" "$default_value" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+key_path = sys.argv[2]
+default_value = sys.argv[3]
+
+try:
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    print(default_value)
+    raise SystemExit(0)
+
+current = data
+for part in key_path.split('.'):
+    if isinstance(current, dict) and part in current:
+        current = current[part]
+    else:
+        current = default_value
+        break
+
+if current is None:
+    current = default_value
+elif isinstance(current, bool):
+    current = 'true' if current else 'false'
+elif not isinstance(current, (str, int, float)):
+    current = default_value
+
+print(str(current))
+PY
+}
 
 source_android_build_common() {
     local common_script="$workspace_root/scripts/android-build-common.sh"
@@ -31,7 +75,8 @@ Usage: build-tavern-android-apk.sh [--runtime-image <path>] [--server-package <p
 
 说明：
 - 若不传 --runtime-image，脚本会调用新的 tavern runtime image 构建链生成独立 image，只写入当前仓库的 android-tavern 工程。
-- 若不传 --server-package，则必须传 --tag，脚本会先生成 tavern server-payload.zip。
+- 若不传 --server-package，则优先读取仓库根目录 stai-build-config.json 的 build.tavernVersion，必要时自动生成 tavern server-payload.zip。
+- 若不传 --build-type，则优先读取仓库根目录 stai-build-config.json 的 build.buildType。
 EOF
 }
 
@@ -73,6 +118,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+configured_build_type="$(read_build_config_value 'build.buildType' 'release')"
+configured_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')"
+
+if [[ -z "$build_type" || "$build_type" == 'auto' ]]; then
+    build_type="$configured_build_type"
+fi
+
+if [[ -z "$build_type" || "$build_type" == 'auto' ]]; then
+    build_type='release'
+fi
+
+if [[ -z "$tavern_tag" || "$tavern_tag" == 'auto' ]]; then
+    tavern_tag="$configured_tavern_tag"
+fi
+
 case "$runtime_rid" in
     linux-arm64)
         ;;
@@ -96,11 +156,6 @@ if [[ -z "$runtime_image_path" ]]; then
 fi
 
 if [[ -z "$server_package_path" ]]; then
-    if [[ -z "$tavern_tag" ]]; then
-        echo "缺少 Tavern server 底包：请通过 --server-package 传入 zip，或通过 --tag 生成官方 release 底包。" >&2
-        exit 1
-    fi
-
     generated_server_root="$workspace_root/artifacts/validation/android-tavern-server-package/$runtime_rid"
     bash "$sync_server_script" --runtime-rid "$runtime_rid" --tag "$tavern_tag" --target-root "$generated_server_root"
     server_package_path="$generated_server_root/server-payload.zip"

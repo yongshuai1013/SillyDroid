@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - .github/workflows/tavern-upstream-apk.yml
+      - stai-build-config.json
       - android-tavern/**
       - gradle/**
       - gradlew
@@ -15,16 +16,17 @@ on:
   workflow_dispatch:
     inputs:
       tavern_tag:
-        description: 指定上游 SillyTavern tag；留空时自动取最新 GitHub Release tag
+        description: 指定上游 SillyTavern tag；auto/latest 时自动取最新 GitHub Release tag
         required: false
-        default: ""
+        default: auto
         type: string
       build_type:
         description: APK 构建类型
         required: false
-        default: release
+        default: auto
         type: choice
         options:
+          - auto
           - debug
           - release
       force_rebuild:
@@ -86,22 +88,80 @@ jobs:
           fetch-depth: 0
           sparse-checkout: |
             android-tavern/gradle.properties
+            stai-build-config.json
 
       - name: Resolve upstream release and build plan
         id: plan
         env:
           UPSTREAM_REPO: SillyTavern/SillyTavern
-          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tavern_tag || '' }}
-          REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'release' }}
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tavern_tag || 'auto' }}
+          REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'auto' }}
           FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || 'false' }}
           PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'true' }}
         run: |
           set -euo pipefail
 
+          read_build_config_value() {
+            local key_path="$1"
+            local default_value="$2"
+
+            python3 - "stai-build-config.json" "$key_path" "$default_value" <<'PY'
+            import json
+            import sys
+            from pathlib import Path
+
+            config_path = Path(sys.argv[1])
+            key_path = sys.argv[2]
+            default_value = sys.argv[3]
+
+            if not config_path.is_file():
+              print(default_value)
+              raise SystemExit(0)
+
+            try:
+              data = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+              print(default_value)
+              raise SystemExit(0)
+
+            current = data
+            for part in key_path.split('.'):
+              if isinstance(current, dict) and part in current:
+                current = current[part]
+              else:
+                current = default_value
+                break
+
+            if current is None:
+              current = default_value
+            elif isinstance(current, bool):
+              current = 'true' if current else 'false'
+            elif not isinstance(current, (str, int, float)):
+              current = default_value
+
+            print(str(current))
+            PY
+          }
+
+          config_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')"
+          config_build_type="$(read_build_config_value 'build.buildType' 'release')"
+
           build_type="$REQUESTED_BUILD_TYPE"
           force_rebuild="$FORCE_REBUILD"
           publish_release="$PUBLISH_RELEASE"
           tavern_tag="$REQUESTED_TAG"
+
+          if [ -z "$build_type" ] || [ "$build_type" = 'auto' ]; then
+            build_type="$config_build_type"
+          fi
+
+          if [ -z "$build_type" ] || [ "$build_type" = 'auto' ]; then
+            build_type='release'
+          fi
+
+          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'auto' ]; then
+            tavern_tag="$config_tavern_tag"
+          fi
 
           case "$build_type" in
             debug|release)
@@ -130,7 +190,7 @@ jobs:
               ;;
           esac
 
-          if [ -z "$tavern_tag" ]; then
+          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'auto' ] || [ "$tavern_tag" = 'latest' ]; then
             tavern_tag="$(gh api "/repos/$UPSTREAM_REPO/releases/latest" --jq '.tag_name')"
           fi
 
@@ -158,7 +218,7 @@ jobs:
               runtime_changed='true'
             fi
 
-            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh))' > /dev/null 2>&1; then
+            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|stai-build-config\.json)' > /dev/null 2>&1; then
               payload_changed='true'
             fi
           fi
@@ -290,33 +350,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout runtime packaging sources
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            android-tavern
-            scripts
-
       - name: Clean runtime prerequisite workspace artifacts
         run: |
           set -euo pipefail
 
           rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/runtime-image"
-
-      - name: Restore Tavern runtime build caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/stai-android-toolchain
-            ~/.cache/stai-android-rootfs
-          key: tavern-runtime-image-${{ runner.os }}-linux-arm64-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-android-runtime-image.sh', 'scripts/sync-android-rootfs.sh', 'android-tavern/app/src/main/assets/bootstrap/scripts/**') }}
-          restore-keys: |
-            tavern-runtime-image-${{ runner.os }}-linux-arm64-
-
-      - name: Install runtime build prerequisites
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip binutils xz-utils
 
       - name: Prepare runtime prerequisite paths
         id: runtime_paths
@@ -377,27 +415,60 @@ jobs:
             fi
           fi
 
-          if [ "$runtime_source" = 'built' ]; then
-            rm -f "$runtime_image_path" "$runtime_metadata_path"
+          if [ "$runtime_source" != 'built' ]; then
+            if [ ! -f "$runtime_image_path" ]; then
+              echo "缺少 runtime image 产物：$runtime_image_path" >&2
+              exit 1
+            fi
 
-            bash ./scripts/build-tavern-android-runtime-image.sh \
-              --runtime-rid linux-arm64 \
-              --output "$runtime_image_path" \
-              --artifact-name 'tavern-android-runtime-linux-arm64' \
-              --metadata-out "$runtime_metadata_path"
-          fi
-
-          if [ ! -f "$runtime_image_path" ]; then
-            echo "缺少 runtime image 产物：$runtime_image_path" >&2
-            exit 1
-          fi
-
-          if [ ! -f "$runtime_metadata_path" ]; then
-            echo "缺少 runtime image metadata：$runtime_metadata_path" >&2
-            exit 1
+            if [ ! -f "$runtime_metadata_path" ]; then
+              echo "缺少 runtime image metadata：$runtime_metadata_path" >&2
+              exit 1
+            fi
           fi
 
           printf 'runtime_source=%s\n' "$runtime_source" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout runtime packaging sources
+        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            android-tavern
+            scripts
+
+      - name: Restore Tavern runtime build caches
+        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stai-android-toolchain
+            ~/.cache/stai-android-rootfs
+          key: tavern-runtime-image-${{ runner.os }}-linux-arm64-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-android-runtime-image.sh', 'scripts/sync-android-rootfs.sh', 'android-tavern/app/src/main/assets/bootstrap/scripts/**') }}
+          restore-keys: |
+            tavern-runtime-image-${{ runner.os }}-linux-arm64-
+
+      - name: Install runtime build prerequisites
+        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip binutils xz-utils
+
+      - name: Build runtime prerequisite
+        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+        run: |
+          set -euo pipefail
+
+          runtime_image_path='${{ steps.runtime_paths.outputs.runtime_image_path }}'
+          runtime_metadata_path='${{ steps.runtime_paths.outputs.runtime_metadata_path }}'
+
+          rm -f "$runtime_image_path" "$runtime_metadata_path"
+
+          bash ./scripts/build-tavern-android-runtime-image.sh \
+            --runtime-rid linux-arm64 \
+            --output "$runtime_image_path" \
+            --artifact-name 'tavern-android-runtime-linux-arm64' \
+            --metadata-out "$runtime_metadata_path"
 
       - name: Finalize runtime prerequisite status
         id: runtime_status
@@ -503,32 +574,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout server packaging sources
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            scripts
-
       - name: Clean server prerequisite workspace artifacts
         run: |
           set -euo pipefail
 
           rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/server-package"
-
-      - name: Restore Tavern server packaging caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/stai-android-toolchain
-            ~/.npm
-          key: tavern-upstream-server-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh') }}
-          restore-keys: |
-            tavern-upstream-server-build-${{ runner.os }}-
-
-      - name: Install server packaging prerequisites
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
 
       - name: Prepare server prerequisite paths
         id: server_paths
@@ -556,7 +606,7 @@ jobs:
           path: |
             ${{ steps.server_paths.outputs.server_package_path }}
             ${{ steps.server_paths.outputs.server_manifest_path }}
-          key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh') }}
+          key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'stai-build-config.json') }}
 
       - name: Resolve Tavern server payload prerequisite
         id: server_prereq
@@ -589,27 +639,62 @@ jobs:
             fi
           fi
 
-          if [ "$server_source" = 'built' ]; then
-            rm -f "$server_package_path" "$server_manifest_path"
+          if [ "$server_source" != 'built' ]; then
+            if [ ! -f "$server_package_path" ]; then
+              echo "缺少 Tavern server payload：$server_package_path" >&2
+              exit 1
+            fi
 
-            bash ./scripts/sync-tavern-android-bootstrap.sh \
-              --runtime-rid linux-arm64 \
-              --tag '${{ needs.resolve.outputs.tavern_tag }}' \
-              --target-root '${{ steps.server_paths.outputs.server_asset_dir }}' \
-              --working-root "$RUNNER_TEMP/android-tavern-bootstrap"
-          fi
-
-          if [ ! -f "$server_package_path" ]; then
-            echo "缺少 Tavern server payload：$server_package_path" >&2
-            exit 1
-          fi
-
-          if [ ! -f "$server_manifest_path" ]; then
-            echo "缺少 Tavern server payload manifest：$server_manifest_path" >&2
-            exit 1
+            if [ ! -f "$server_manifest_path" ]; then
+              echo "缺少 Tavern server payload manifest：$server_manifest_path" >&2
+              exit 1
+            fi
           fi
 
           printf 'server_source=%s\n' "$server_source" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout server packaging sources
+        if: steps.server_prereq.outputs.server_source == 'built'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            stai-build-config.json
+            android-tavern/extensions
+            android-tavern/server-overlay
+            scripts
+
+      - name: Restore Tavern server packaging caches
+        if: steps.server_prereq.outputs.server_source == 'built'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stai-android-toolchain
+            ~/.npm
+          key: tavern-upstream-server-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'stai-build-config.json', 'android-tavern/extensions/**', 'android-tavern/server-overlay/**') }}
+          restore-keys: |
+            tavern-upstream-server-build-${{ runner.os }}-
+
+      - name: Install server packaging prerequisites
+        if: steps.server_prereq.outputs.server_source == 'built'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
+
+      - name: Build Tavern server payload prerequisite
+        if: steps.server_prereq.outputs.server_source == 'built'
+        run: |
+          set -euo pipefail
+
+          server_package_path='${{ steps.server_paths.outputs.server_package_path }}'
+          server_manifest_path='${{ steps.server_paths.outputs.server_manifest_path }}'
+
+          rm -f "$server_package_path" "$server_manifest_path"
+
+          bash ./scripts/sync-tavern-android-bootstrap.sh \
+            --runtime-rid linux-arm64 \
+            --tag '${{ needs.resolve.outputs.tavern_tag }}' \
+            --target-root '${{ steps.server_paths.outputs.server_asset_dir }}' \
+            --working-root "$RUNNER_TEMP/android-tavern-bootstrap"
 
       - name: Finalize server prerequisite status
         id: server_status
@@ -723,6 +808,7 @@ jobs:
         with:
           sparse-checkout: |
             .github
+            stai-build-config.json
             android-tavern
             gradle
             gradlew
@@ -744,7 +830,7 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.npm
-          key: tavern-upstream-apk-${{ runner.os }}-${{ hashFiles('scripts/*.sh', 'android-tavern/build.gradle.kts', 'android-tavern/settings.gradle.kts', 'android-tavern/gradle.properties', 'android-tavern/app/build.gradle.kts', 'gradle/wrapper/*', 'gradlew') }}
+          key: tavern-upstream-apk-${{ runner.os }}-${{ hashFiles('scripts/*.sh', 'stai-build-config.json', 'android-tavern/build.gradle.kts', 'android-tavern/settings.gradle.kts', 'android-tavern/gradle.properties', 'android-tavern/app/build.gradle.kts', 'gradle/wrapper/*', 'gradlew') }}
           restore-keys: |
             tavern-upstream-apk-${{ runner.os }}-
 
