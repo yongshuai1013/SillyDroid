@@ -28,13 +28,22 @@ internal object HostLogReader {
     private const val defaultMaxBytes = 768 * 1024
     private const val defaultMaxLines = 6_000
 
+    private val visibleLogFileNames = linkedSetOf(
+        "startup.log",
+        "sillydroid-server.log",
+        "rootfs-runtime.log"
+    )
+
     fun listEntries(context: Context): List<HostLogEntry> {
         val paths = HostPaths.from(context)
         paths.ensureWorkingDirectories()
         return paths.logsDir.listFiles()
             .orEmpty()
-            .filter { file -> file.isFile && file.extension.equals("log", ignoreCase = true) }
-            .sortedByDescending(File::lastModified)
+            .filter { file ->
+                file.isFile &&
+                    file.extension.equals("log", ignoreCase = true) &&
+                    file.name.lowercase(Locale.ROOT) in visibleLogFileNames
+            }
             .map { file ->
                 HostLogEntry(
                     sourceFile = file,
@@ -44,6 +53,7 @@ internal object HostLogReader {
                     lastModified = file.lastModified()
                 )
             }
+            .sortedWith(compareBy<HostLogEntry>({ displayOrder(it.fileName) }).thenByDescending { it.lastModified })
     }
 
     fun readPreferredSnapshot(
@@ -59,8 +69,14 @@ internal object HostLogReader {
             availableEntries.isEmpty() -> null
             preferTavernServerLog -> availableEntries.firstOrNull { entry ->
                 entry.fileName.equals("sillydroid-server.log", ignoreCase = true)
+            } ?: availableEntries.firstOrNull { entry ->
+                entry.fileName.equals("startup.log", ignoreCase = true)
             } ?: availableEntries.first()
-            else -> availableEntries.first()
+            else -> availableEntries.firstOrNull { entry ->
+                entry.fileName.equals("startup.log", ignoreCase = true)
+            } ?: availableEntries.firstOrNull { entry ->
+                entry.fileName.equals("rootfs-runtime.log", ignoreCase = true)
+            } ?: availableEntries.first()
         }
             ?: return null
 
@@ -119,10 +135,20 @@ internal object HostLogReader {
         return when {
             normalizedName == "sillydroid-server.log" -> context.getString(R.string.bootstrap_settings_logs_name_tavern_server)
             normalizedName == "startup.log" -> context.getString(R.string.bootstrap_settings_logs_name_startup)
+            normalizedName == "rootfs-runtime.log" -> context.getString(R.string.bootstrap_settings_logs_name_runtime)
             normalizedName.startsWith("extension-install-preview-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_preview)
             normalizedName.startsWith("extension-reinstall-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_reinstall)
             normalizedName.startsWith("extension-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_runtime)
             else -> context.getString(R.string.bootstrap_settings_logs_name_other)
+        }
+    }
+
+    private fun displayOrder(fileName: String): Int {
+        return when (fileName.lowercase(Locale.ROOT)) {
+            "startup.log" -> 0
+            "sillydroid-server.log" -> 1
+            "rootfs-runtime.log" -> 2
+            else -> Int.MAX_VALUE
         }
     }
 

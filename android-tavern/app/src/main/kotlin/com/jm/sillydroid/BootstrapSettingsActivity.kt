@@ -98,6 +98,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private val configRepository by lazy { TavernConfigRepository(this) }
     private val archiveManager by lazy { TavernDataArchiveManager(this) }
     private val hostConfigStore by lazy { BootstrapHostConfigStore(this) }
+    private val processManager by lazy<HostProcessManager> { DefaultHostProcessManager(this) }
     private val downloadManager by lazy { getSystemService(DownloadManager::class.java) }
     private lateinit var screenController: BootstrapSettingsScreenController
     private lateinit var formController: BootstrapSettingsFormController
@@ -327,6 +328,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             configRepository = configRepository,
             formController = formController,
             screenController = screenController,
+            processManager = processManager,
             onStartBootstrapConfirmed = {
                 updateResultFlags(shouldStartBootstrap = true)
                 finish()
@@ -337,6 +339,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             configRepository = configRepository,
             archiveManager = archiveManager,
             hostConfigStore = hostConfigStore,
+            processManager = processManager,
             setBusy = screenController::setBusy,
             applyDraft = settingsCoordinator::applyDraftConfiguration,
             replaceLoadedConfiguration = settingsCoordinator::replaceLoadedConfiguration,

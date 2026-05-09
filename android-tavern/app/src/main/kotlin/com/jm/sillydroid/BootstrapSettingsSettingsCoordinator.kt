@@ -11,8 +11,14 @@ internal class BootstrapSettingsSettingsCoordinator(
     private val configRepository: TavernConfigRepository,
     private val formController: BootstrapSettingsFormController,
     private val screenController: BootstrapSettingsScreenController,
+    private val processManager: HostProcessManager,
     private val onStartBootstrapConfirmed: () -> Unit
 ) {
+    private data class SaveAndRestartResult(
+        val configSaved: Boolean,
+        val failureMessage: String?
+    )
+
     private var currentRoot = linkedMapOf<String, Any?>()
     private var initialFormSnapshot = ""
 
@@ -70,21 +76,28 @@ internal class BootstrapSettingsSettingsCoordinator(
 
         activity.lifecycleScope.launch {
             screenController.setBusy(true)
-            val saveError = withContext(Dispatchers.IO) {
-                runCatching {
+            val saveResult = withContext(Dispatchers.IO) {
+                var configSaved = false
+                val failureMessage = runCatching {
                     configRepository.saveConfig(updatedRoot)
+                    configSaved = true
+                    processManager.stopForSettingsAndAwait(activity.getString(R.string.bootstrap_settings_restart_stop_timeout))
                 }.exceptionOrNull()?.message
+                SaveAndRestartResult(configSaved = configSaved, failureMessage = failureMessage)
             }
             screenController.setBusy(false)
 
-            if (saveError != null) {
-                showValidationIssue(BootstrapSettingsValidationIssue(message = saveError))
+            if (saveResult.configSaved) {
+                currentRoot = updatedRoot
+                initialFormSnapshot = formController.captureSnapshot()
+                refreshDirtyState()
+            }
+
+            if (saveResult.failureMessage != null) {
+                showValidationIssue(BootstrapSettingsValidationIssue(message = saveResult.failureMessage))
                 return@launch
             }
 
-            currentRoot = updatedRoot
-            initialFormSnapshot = formController.captureSnapshot()
-            refreshDirtyState()
             onStartBootstrapConfirmed()
         }
     }

@@ -486,13 +486,27 @@ class StartupCoordinatorService : Service() {
     }
 
     private fun buildNotification(state: StartupState): Notification {
+        val normalizedProgress = state.progressPercent.coerceIn(0, 100)
+        val showProgress = !state.isReady && !state.canRetry && state.phase != StartupPhase.CONFIGURING
+        val indeterminate = normalizedProgress <= 0
+        val contentText = if (showProgress && !indeterminate) {
+            "${state.message} (${normalizedProgress}%)"
+        } else {
+            state.message
+        }
+
         return NotificationCompat.Builder(this, BootConfig.notificationChannelId)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(getString(R.string.bootstrap_notification_title))
-            .setContentText(state.message)
+            .setContentText(contentText)
             .setOngoing(!state.isReady)
             .setOnlyAlertOnce(true)
             .setContentIntent(createContentIntent())
+            .setProgress(
+                if (showProgress) 100 else 0,
+                if (showProgress) normalizedProgress else 0,
+                showProgress && indeterminate
+            )
             .build()
     }
 

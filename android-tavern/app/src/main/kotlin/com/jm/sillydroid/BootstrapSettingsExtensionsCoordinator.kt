@@ -2004,17 +2004,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 append("\n")
                 append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_successes))
                 append("\n")
-                append(successes.joinToString(separator = "\n\n") { preview ->
-                    buildString {
-                        append("- ")
-                        append(preview.displayName)
-                        append(" -> ")
-                        append(preview.folderName)
-                        append("\n")
-                        append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_source, preview.repositoryUrl))
-                        append("\n")
-                        append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_log, preview.previewLogPath))
-                    }
+                append(successes.joinToString(separator = "\n") { preview ->
+                    "- ${preview.displayName}：成功"
                 })
             }
 
@@ -2023,7 +2014,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_skipped))
                 append("\n")
                 append(skipped.joinToString(separator = "\n") { preview ->
-                    "- ${preview.displayName} -> ${preview.folderName}"
+                    "- ${preview.displayName}：跳过"
                 })
             }
 
@@ -2031,17 +2022,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 append("\n")
                 append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_failures))
                 append("\n")
-                append(failures.joinToString(separator = "\n\n") { failure ->
-                    buildString {
-                        append("- ")
-                        append(failure.input)
-                        append(": ")
-                        append(failure.message)
-                        failure.logPath?.let { logPath ->
-                            append("\n")
-                            append(activity.getString(R.string.bootstrap_settings_extensions_batch_result_log, logPath))
-                        }
-                    }
+                append(failures.joinToString(separator = "\n") { failure ->
+                    "- ${failure.input}：失败（${failure.message}）"
                 })
             }
         }

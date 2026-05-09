@@ -7,14 +7,13 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.flow.first
 
 internal class BootstrapSettingsDataCoordinator(
     private val activity: AppCompatActivity,
     private val configRepository: TavernConfigRepository,
     private val archiveManager: TavernDataArchiveManager,
     private val hostConfigStore: BootstrapHostConfigStore,
+    private val processManager: HostProcessManager,
     private val setBusy: (Boolean) -> Unit,
     private val applyDraft: (LoadedTavernConfig) -> Unit,
     private val replaceLoadedConfiguration: (LoadedTavernConfig, String?) -> Unit,
@@ -29,13 +28,6 @@ internal class BootstrapSettingsDataCoordinator(
         val importResult: TavernDataImportResult,
         val importedPort: Int,
         val loadedConfig: LoadedTavernConfig
-    )
-
-    private val stoppedPhases = setOf(
-        StartupPhase.CONFIGURING,
-        StartupPhase.IDLE,
-        StartupPhase.BLOCKED,
-        StartupPhase.ERROR
     )
 
     fun restoreDefaults() {
@@ -75,7 +67,7 @@ internal class BootstrapSettingsDataCoordinator(
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     if (preview.archiveKind == TavernDataArchiveKind.HOST_FULL_SNAPSHOT) {
-                        stopServiceForImport()
+                        processManager.stopForSettingsAndAwait(activity.getString(R.string.bootstrap_settings_import_stop_timeout))
                     }
                     val importResult = archiveManager.importDataArchive(sourceUri)
                     val loadedConfig = configRepository.loadConfig()
@@ -117,7 +109,7 @@ internal class BootstrapSettingsDataCoordinator(
             setBusy(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    stopServiceForImport()
+                    processManager.stopForSettingsAndAwait(activity.getString(R.string.bootstrap_settings_import_stop_timeout))
                     clearManagedData()
                     hostConfigStore.servicePort = BootConfig.defaultServicePort
                 }
@@ -180,24 +172,6 @@ internal class BootstrapSettingsDataCoordinator(
             )
         } else {
             baseMessage
-        }
-    }
-
-    private suspend fun stopServiceForImport() {
-        if (StartupRuntimeStore.state.value.phase !in stoppedPhases) {
-            withContext(Dispatchers.Main.immediate) {
-                activity.startService(StartupCoordinatorService.createStopForSettingsIntent(activity))
-            }
-        }
-
-        val stoppedState = withTimeoutOrNull(5000) {
-            StartupRuntimeStore.state.first { state ->
-                state.phase in stoppedPhases
-            }
-        }
-
-        if (stoppedState == null) {
-            throw BootstrapException(activity.getString(R.string.bootstrap_settings_import_stop_timeout))
         }
     }
 

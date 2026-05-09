@@ -108,6 +108,7 @@
     <string name="bootstrap_settings_logs_select_item">%1$s · 更新时间 %2$s</string>
     <string name="bootstrap_settings_logs_name_tavern_server">酒馆日志</string>
     <string name="bootstrap_settings_logs_name_startup">启动日志</string>
+    <string name="bootstrap_settings_logs_name_runtime">运行时日志</string>
     <string name="bootstrap_settings_logs_name_extension_preview">扩展预检日志</string>
     <string name="bootstrap_settings_logs_name_extension_reinstall">扩展重装日志</string>
     <string name="bootstrap_settings_logs_name_extension_runtime">扩展运行日志</string>
@@ -237,6 +238,7 @@
     <string name="bootstrap_settings_import_port_changed_suffix">并检测到启动端口从 %1$d 变为 %2$d。返回或保存后将按新端口启动。</string>
     <string name="bootstrap_settings_import_failed">导入压缩包失败。</string>
     <string name="bootstrap_settings_import_stop_timeout">停止本地 Tavern 服务超时，请稍后重试导入。</string>
+    <string name="bootstrap_settings_restart_stop_timeout">配置已保存，但停止本地 Tavern 服务超时，未能按新配置重新启动。</string>
     <string name="bootstrap_settings_import_unknown_user">未识别</string>
     <string name="bootstrap_settings_export_success">已导出 Tavern 用户数据压缩包。</string>
     <string name="bootstrap_settings_export_failed">导出压缩包失败。</string>

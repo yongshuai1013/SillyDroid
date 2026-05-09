@@ -137,7 +137,6 @@ class MainActivity : AppCompatActivity() {
     private var webSessionScriptHandler: ScriptHandler? = null
     private var loadedUrl = ""
     private var hasRestoredWebViewState = false
-    private var skipNextWebViewStateRestore = false
     private var isOpeningBootstrapSettings = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var floatingLogsRefreshJob: Job? = null
@@ -161,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         val layoutChanged: Boolean
     )
     private val hostConfigStore by lazy { BootstrapHostConfigStore(this) }
+    private val processManager by lazy<HostProcessManager> { DefaultHostProcessManager(this) }
     private val defaultExtensionsProgressHost = DefaultExtensionsProgressHost()
     private val defaultExtensionsCoordinator by lazy {
         BootstrapSettingsExtensionsCoordinator.createHeadless(
@@ -189,10 +189,11 @@ class MainActivity : AppCompatActivity() {
     private val bootstrapSettingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         isOpeningBootstrapSettings = false
         if (result.resultCode == Activity.RESULT_OK && BootstrapSettingsActivity.shouldStartBootstrap(result.data)) {
-            skipNextWebViewStateRestore = true
             hasRestoredWebViewState = false
             loadedUrl = ""
-            recreate()
+            bootstrapOverlay.isVisible = true
+            webView.isVisible = false
+            startBootstrap(true)
             return@registerForActivityResult
         }
 
@@ -254,12 +255,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        if (skipNextWebViewStateRestore) {
-            outState.remove(webViewStateKey)
-            outState.remove(loadedUrlStateKey)
-            return
-        }
-
         // Activity 被系统回收后，优先恢复 WebView 现有会话，避免重新 load baseUrl 把页面打回首页。
         val webViewState = Bundle()
         webView.saveState(webViewState)
@@ -275,7 +270,6 @@ class MainActivity : AppCompatActivity() {
         defaultExtensionsProgressHost.hide()
         appUpdateCoordinator.onDestroy()
         stopFloatingLogsRefreshLoop()
-        skipNextWebViewStateRestore = false
         super.onDestroy()
     }
 
@@ -2052,8 +2046,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startBootstrap(forceRestart: Boolean) {
-        val intent = StartupCoordinatorService.createStartIntent(this, forceRestart)
-        ContextCompat.startForegroundService(this, intent)
+        processManager.start(forceRestart)
     }
 
     private fun reloadTavernUiIfPossible(state: StartupState) {
