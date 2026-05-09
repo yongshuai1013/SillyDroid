@@ -1,30 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="TextAppearance.SillyTavern.SettingsButton" parent="TextAppearance.Material3.LabelLarge">
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">12sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
     <style name="TextAppearance.SillyTavern.SettingsSectionTitle" parent="TextAppearance.Material3.TitleSmall">
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
-    </style>
-
-    <style name="TextAppearance.SillyTavern.SettingsCardTitle" parent="TextAppearance.Material3.BodyLarge">
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
+    <style name="TextAppearance.SillyTavern.SettingsCardTitle" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.SillyTavern.SettingsDenseCardTitle" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="lineHeight">17sp</item>
+    </style>
+
     <style name="TextAppearance.SillyTavern.SettingsBody" parent="TextAppearance.Material3.BodyMedium">
-        <item name="android:textSize">11sp</item>
+        <item name="android:textSize">10sp</item>
     </style>
 
     <style name="TextAppearance.SillyTavern.SettingsMeta" parent="TextAppearance.Material3.BodySmall">
-        <item name="android:textSize">10sp</item>
+        <item name="android:textSize">9sp</item>
     </style>
 
     <style name="TextAppearance.SillyTavern.SettingsBadge" parent="TextAppearance.Material3.LabelMedium">
-        <item name="android:textSize">10sp</item>
+        <item name="android:textSize">9sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
@@ -60,6 +66,7 @@
     <style name="Widget.SillyTavern.SettingsTextInputLayout.OutlinedBox" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <item name="boxStrokeWidth">1dp</item>
         <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="boxCollapsedPaddingTop">2dp</item>
         <item name="boxCornerRadiusTopStart">14dp</item>
         <item name="boxCornerRadiusTopEnd">14dp</item>
         <item name="boxCornerRadiusBottomStart">14dp</item>
@@ -71,6 +78,7 @@
     <style name="Widget.SillyTavern.SettingsTextInputLayout.ExposedDropdown" parent="Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu">
         <item name="boxStrokeWidth">1dp</item>
         <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="boxCollapsedPaddingTop">2dp</item>
         <item name="boxCornerRadiusTopStart">14dp</item>
         <item name="boxCornerRadiusTopEnd">14dp</item>
         <item name="boxCornerRadiusBottomStart">14dp</item>
@@ -84,7 +92,7 @@
         <item name="android:paddingEnd">@dimen/stai_control_padding_horizontal</item>
         <item name="android:paddingTop">@dimen/stai_control_padding_vertical</item>
         <item name="android:paddingBottom">@dimen/stai_control_padding_vertical</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">12sp</item>
     </style>
 
     <style name="Widget.SillyTavern.SettingsTextInputEditText" parent="Widget.Material3.TextInputEditText.OutlinedBox">
@@ -93,14 +101,14 @@
         <item name="android:paddingEnd">@dimen/stai_control_padding_horizontal</item>
         <item name="android:paddingTop">@dimen/stai_control_padding_vertical</item>
         <item name="android:paddingBottom">@dimen/stai_control_padding_vertical</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">12sp</item>
     </style>
 
     <style name="Widget.SillyTavern.FloatingLogsCompactButton" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:minHeight">@dimen/stai_floating_logs_compact_control_height</item>
-        <item name="android:minWidth">0dp</item>
-        <item name="android:paddingStart">10dp</item>
-        <item name="android:paddingEnd">10dp</item>
+        <item name="android:minWidth">@dimen/stai_floating_logs_compact_control_min_width</item>
+        <item name="android:paddingStart">@dimen/stai_space_md</item>
+        <item name="android:paddingEnd">@dimen/stai_space_md</item>
         <item name="android:paddingTop">0dp</item>
         <item name="android:paddingBottom">0dp</item>
         <item name="android:textAppearance">@style/TextAppearance.SillyTavern.FloatingLogsCompactButton</item>

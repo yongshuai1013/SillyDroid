@@ -70,8 +70,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var extensionsPanelView: View
     private lateinit var extensionsListContainer: LinearLayout
     private lateinit var extensionsEmptyView: TextView
-    private lateinit var extensionsInstallButton: MaterialButton
-    private lateinit var extensionsReloadButton: MaterialButton
+    private lateinit var extensionsInstallButton: ImageButton
+    private lateinit var extensionsReloadButton: ImageButton
     private lateinit var extensionsProgressIndicator: LinearProgressIndicator
     private lateinit var extensionsProgressLabel: TextView
     private lateinit var logsPanelView: View

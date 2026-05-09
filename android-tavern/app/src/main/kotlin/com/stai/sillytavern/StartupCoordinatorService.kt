@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.FileObserver
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -50,6 +51,9 @@ class StartupCoordinatorService : Service() {
     private var bootstrapJob: Job? = null
     private var serverMonitorJob: Job? = null
     private var serverProcess: ManagedProcess? = null
+    private var serverLogObserver: FileObserver? = null
+    private var startupPhaseBaseDetails: String? = null
+    private var lastObservedServerLogLine = ""
     private val startupLogFile: File
         get() = File(filesDir, "android-tavern/logs/startup.log")
     private val serverLogFile: File
@@ -87,6 +91,7 @@ class StartupCoordinatorService : Service() {
 
     override fun onDestroy() {
         bootstrapJob?.cancel()
+        stopServerLogObserver()
         stopManagedProcesses()
         serviceScope.cancel()
         super.onDestroy()
@@ -120,6 +125,7 @@ class StartupCoordinatorService : Service() {
 
     private suspend fun runBootstrap() {
         resetStartupLog()
+        stopServerLogObserver()
         try {
             val paths = HostPaths.from(applicationContext)
             val servicePort = BootConfig.servicePort(applicationContext)
@@ -194,42 +200,37 @@ class StartupCoordinatorService : Service() {
                 )
             }
 
-            updateState(
-                StartupState(
-                    phase = StartupPhase.STARTING_SERVER,
-                    message = "正在拉起 SillyTavern。",
-                    details = "正在启动本地 Node 服务进程。",
-                    localUrl = localUrl,
-                    progressPercent = 94
-                )
+            updateStartupPhaseState(
+                phase = StartupPhase.STARTING_SERVER,
+                message = "正在拉起 SillyTavern。",
+                baseDetails = "正在启动本地 Node 服务进程。",
+                localUrl = localUrl,
+                progressPercent = 94
             )
             stopManagedProcesses()
             serverProcess = ServerController(launcher, paths, servicePort).start()
 
-            updateState(
-                StartupState(
-                    phase = StartupPhase.WAITING_READY,
-                    message = "正在等待本地 Tavern 服务就绪。",
-                    details = "正在探测本地 HTTP 服务响应。",
-                    localUrl = localUrl,
-                    progressPercent = 96
-                )
+            updateStartupPhaseState(
+                phase = StartupPhase.WAITING_READY,
+                message = "正在等待本地 Tavern 服务就绪。",
+                baseDetails = "正在探测本地 HTTP 服务响应。",
+                localUrl = localUrl,
+                progressPercent = 96
             )
             if (!HealthProbe.awaitReady(readinessUrl) { attempt, totalAttempts ->
                     val progressPercent = (96 + ((attempt.toDouble() / totalAttempts.toDouble()) * 3.0).toInt()).coerceIn(96, 99)
-                    updateState(
-                        StartupState(
-                            phase = StartupPhase.WAITING_READY,
-                            message = "正在等待本地 Tavern 服务就绪。",
-                            details = "健康检查 $attempt/$totalAttempts，已耗时 ${attempt} 秒。",
-                            localUrl = localUrl,
-                            progressPercent = progressPercent
-                        )
+                    updateStartupPhaseState(
+                        phase = StartupPhase.WAITING_READY,
+                        message = "正在等待本地 Tavern 服务就绪。",
+                        baseDetails = "健康检查 $attempt/$totalAttempts，已耗时 ${attempt} 秒。",
+                        localUrl = localUrl,
+                        progressPercent = progressPercent
                     )
                 }) {
                 throw BootstrapException("本地 Tavern 服务在等待窗口内未就绪。")
             }
 
+            stopServerLogObserver()
             updateState(
                 StartupState(
                     phase = StartupPhase.READY,
@@ -241,9 +242,11 @@ class StartupCoordinatorService : Service() {
             startServerMonitor()
         } catch (_: CancellationException) {
             appendStartupLog("Bootstrap cancelled.")
+            stopServerLogObserver()
         } catch (exception: BootstrapException) {
             appendStartupLog("BootstrapException: ${exception.message ?: exception.javaClass.simpleName}")
             appendStartupLog(formatThrowable(exception))
+            stopServerLogObserver()
             updateState(
                 StartupState(
                     phase = StartupPhase.BLOCKED,
@@ -254,6 +257,7 @@ class StartupCoordinatorService : Service() {
         } catch (exception: Exception) {
             appendStartupLog("Exception: ${exception.message ?: exception.javaClass.simpleName}")
             appendStartupLog(formatThrowable(exception))
+            stopServerLogObserver()
             updateState(
                 StartupState(
                     phase = StartupPhase.ERROR,
@@ -267,6 +271,7 @@ class StartupCoordinatorService : Service() {
     private suspend fun interruptForSettings() {
         bootstrapJob?.cancel(CancellationException("Interrupted for bootstrap settings."))
         bootstrapJob = null
+        stopServerLogObserver()
         updateState(
             StartupState(
                 phase = StartupPhase.PAUSING,
@@ -321,6 +326,114 @@ class StartupCoordinatorService : Service() {
     private fun appendStartupLog(message: String) {
         startupLogFile.parentFile?.mkdirs()
         startupLogFile.appendText("${System.currentTimeMillis()} $message\n")
+    }
+
+    private fun updateStartupPhaseState(
+        phase: StartupPhase,
+        message: String,
+        baseDetails: String,
+        localUrl: String,
+        progressPercent: Int
+    ) {
+        startupPhaseBaseDetails = baseDetails
+        ensureServerLogObserverStarted()
+        lastObservedServerLogLine = readServerLogLastLine()
+        updateState(
+            StartupState(
+                phase = phase,
+                message = message,
+                details = buildStartupPhaseDetails(baseDetails),
+                localUrl = localUrl,
+                progressPercent = progressPercent
+            )
+        )
+    }
+
+    private fun ensureServerLogObserverStarted() {
+        if (serverLogObserver != null) {
+            return
+        }
+
+        val logsDir = serverLogFile.parentFile?.apply {
+            mkdirs()
+        } ?: return
+        val mask = FileObserver.CREATE or FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.DELETE
+        serverLogObserver = object : FileObserver(logsDir, mask) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != null && !path.equals(serverLogFile.name, ignoreCase = true)) {
+                    return
+                }
+
+                serviceScope.launch {
+                    refreshStartupPhaseLogTail()
+                }
+            }
+        }.also { observer ->
+            observer.startWatching()
+        }
+    }
+
+    private fun stopServerLogObserver() {
+        serverLogObserver?.stopWatching()
+        serverLogObserver = null
+        startupPhaseBaseDetails = null
+        lastObservedServerLogLine = ""
+    }
+
+    private fun refreshStartupPhaseLogTail() {
+        val currentState = StartupRuntimeStore.state.value
+        val baseDetails = startupPhaseBaseDetails ?: return
+        if (currentState.phase != StartupPhase.STARTING_SERVER && currentState.phase != StartupPhase.WAITING_READY) {
+            return
+        }
+
+        val latestLine = readServerLogLastLine()
+        if (latestLine == lastObservedServerLogLine) {
+            return
+        }
+
+        lastObservedServerLogLine = latestLine
+        val updatedDetails = buildStartupPhaseDetails(baseDetails)
+        if (updatedDetails == currentState.details) {
+            return
+        }
+
+        updateState(currentState.copy(details = updatedDetails))
+    }
+
+    private fun buildStartupPhaseDetails(baseDetails: String): String {
+        val lastServerLogLine = readServerLogLastLine()
+        if (lastServerLogLine.isBlank()) {
+            return baseDetails
+        }
+
+        return buildString {
+            append(baseDetails)
+            append('\n')
+            append(getString(R.string.bootstrap_startup_tavern_log_tail, lastServerLogLine))
+        }
+    }
+
+    private fun readServerLogLastLine(maxChars: Int = 220): String {
+        val lastLine = runCatching {
+            if (!serverLogFile.exists()) {
+                return@runCatching ""
+            }
+
+            serverLogFile.useLines { lines ->
+                lines
+                    .map { it.trimEnd() }
+                    .filter { it.isNotBlank() }
+                    .lastOrNull()
+                    .orEmpty()
+            }
+        }.getOrDefault("")
+
+        if (lastLine.length <= maxChars) {
+            return lastLine
+        }
+
+        return lastLine.takeLast(maxChars)
     }
 
     private fun readServerLogExcerpt(maxLines: Int = 24, maxChars: Int = 1800): String {

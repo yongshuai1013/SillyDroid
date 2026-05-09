@@ -1,9 +1,13 @@
 package com.stai.sillytavern
 
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.text.InputType
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout.LayoutParams
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -11,7 +15,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.core.widget.TextViewCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -33,8 +36,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
     private val activity: AppCompatActivity,
     private val listContainer: LinearLayout,
     private val emptyView: TextView,
-    private val installButton: MaterialButton,
-    private val reloadButton: MaterialButton,
+    private val installButton: ImageButton,
+    private val reloadButton: ImageButton,
     private val progressIndicator: LinearProgressIndicator,
     private val progressLabel: TextView,
     private val setBusy: (Boolean) -> Unit,
@@ -337,7 +340,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
             setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding))
         }
 
@@ -347,7 +350,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
         infoColumn.addView(TextView(activity).apply {
             text = extension.displayName
-            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsCardTitle)
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsDenseCardTitle)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
@@ -367,12 +370,14 @@ internal class BootstrapSettingsExtensionsCoordinator(
         })
         container.addView(infoColumn)
 
-        container.addView(MaterialButton(activity, null, MaterialR.attr.materialButtonOutlinedStyle).apply {
-            text = activity.getString(R.string.bootstrap_settings_extensions_install)
+        container.addView(createActionIconButton(
+            iconResId = R.drawable.ic_add,
+            contentDescriptionResId = R.string.bootstrap_settings_extensions_install,
+            tintAttr = MaterialR.attr.colorPrimary
+        ) {
+            confirmInstallBundledExtension(extension)
+        }.apply {
             isEnabled = !busy
-            setOnClickListener {
-                confirmInstallBundledExtension(extension)
-            }
         })
 
         card.addView(container)
@@ -392,14 +397,24 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding))
         }
 
-        container.addView(TextView(activity).apply {
+        val contentRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+        }
+
+        val infoColumn = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        infoColumn.addView(TextView(activity).apply {
             text = extension.displayName
-            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsCardTitle)
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsDenseCardTitle)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
 
-        container.addView(TextView(activity).apply {
+        infoColumn.addView(TextView(activity).apply {
             val versionLabel = extension.version ?: activity.getString(R.string.bootstrap_settings_extensions_version_unknown)
             val authorLabel = extension.author ?: activity.getString(R.string.bootstrap_settings_extensions_author_unknown)
             text = "$versionLabel  •  $authorLabel"
@@ -408,7 +423,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
         })
 
-        container.addView(TextView(activity).apply {
+        infoColumn.addView(TextView(activity).apply {
             text = activity.getString(R.string.bootstrap_settings_extensions_folder, extension.folderName)
             TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
@@ -416,7 +431,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         })
 
         if (!extension.homePage.isNullOrBlank()) {
-            container.addView(TextView(activity).apply {
+            infoColumn.addView(TextView(activity).apply {
                 text = activity.getString(R.string.bootstrap_settings_extensions_source, extension.homePage)
                 TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
@@ -425,7 +440,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
 
         if (!extension.manifestHealthy || !extension.manifestMessage.isNullOrBlank()) {
-            container.addView(TextView(activity).apply {
+            infoColumn.addView(TextView(activity).apply {
                 text = extension.manifestMessage ?: activity.getString(R.string.bootstrap_settings_extensions_manifest_missing)
                 TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
                 setTextColor(resolveColor(MaterialR.attr.colorError))
@@ -436,40 +451,40 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val actionsRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
-            setPadding(0, dimen(R.dimen.stai_space_lg), 0, 0)
+            layoutParams = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dimen(R.dimen.stai_space_sm)
+            }
         }
 
-        val reinstallButton = MaterialButton(activity, null, MaterialR.attr.materialButtonOutlinedStyle).apply {
-            text = activity.getString(R.string.bootstrap_settings_extensions_reinstall)
-            isEnabled = !busy && !extension.homePage.isNullOrBlank()
-            setOnClickListener {
-                if (extension.homePage.isNullOrBlank()) {
-                    showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_missing))
-                } else {
-                    confirmReinstall(extension)
-                }
+        val reinstallButton = createActionIconButton(
+            iconResId = R.drawable.ic_restore_defaults,
+            contentDescriptionResId = R.string.bootstrap_settings_extensions_reinstall
+        ) {
+            if (extension.homePage.isNullOrBlank()) {
+                showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_missing))
+            } else {
+                confirmReinstall(extension)
             }
+        }.apply {
+            isEnabled = !busy && !extension.homePage.isNullOrBlank()
         }
         actionsRow.addView(reinstallButton)
 
-        val deleteButton = MaterialButton(activity, null, MaterialR.attr.materialButtonOutlinedStyle).apply {
-            text = activity.getString(R.string.bootstrap_settings_extensions_delete)
-            setTextColor(resolveColor(MaterialR.attr.colorError))
-            strokeColor = android.content.res.ColorStateList.valueOf(resolveColor(MaterialR.attr.colorError))
+        val deleteButton = createActionIconButton(
+            iconResId = R.drawable.ic_delete,
+            contentDescriptionResId = R.string.bootstrap_settings_extensions_delete,
+            tintAttr = MaterialR.attr.colorError
+        ) {
+            confirmDelete(extension)
+        }.apply {
             isEnabled = !busy
-            val layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            layoutParams.marginStart = dimen(R.dimen.stai_space_md)
-            this.layoutParams = layoutParams
-            setOnClickListener {
-                confirmDelete(extension)
-            }
+            (layoutParams as? LinearLayout.LayoutParams)?.marginStart = dimen(R.dimen.stai_space_xs)
         }
         actionsRow.addView(deleteButton)
 
-        container.addView(actionsRow)
+        contentRow.addView(infoColumn)
+        contentRow.addView(actionsRow)
+        container.addView(contentRow)
         card.addView(container)
         return card
     }
@@ -501,6 +516,33 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 reinstallExtension(extension)
             }
             .show()
+    }
+
+    private fun createActionIconButton(
+        iconResId: Int,
+        contentDescriptionResId: Int,
+        tintAttr: Int = MaterialR.attr.colorOnSurfaceVariant,
+        onClick: () -> Unit
+    ): ImageButton {
+        val size = dimen(R.dimen.stai_settings_dense_icon_button_size)
+        val padding = dimen(R.dimen.stai_settings_dense_icon_button_padding)
+        val backgroundAttr = TypedValue()
+        activity.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, backgroundAttr, true)
+
+        return ImageButton(activity).apply {
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            minimumWidth = 0
+            minimumHeight = 0
+            setPadding(padding, padding, padding, padding)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setBackgroundResource(backgroundAttr.resourceId)
+            setImageResource(iconResId)
+            imageTintList = ColorStateList.valueOf(resolveColor(tintAttr))
+            contentDescription = activity.getString(contentDescriptionResId)
+            setOnClickListener {
+                onClick()
+            }
+        }
     }
 
     private fun deleteExtension(extension: ManagedExtension) {

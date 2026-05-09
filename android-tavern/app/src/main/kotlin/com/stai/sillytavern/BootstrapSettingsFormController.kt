@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.transition.TransitionManager
 import android.util.TypedValue
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -377,8 +378,8 @@ internal class BootstrapSettingsFormController(
                 })
                 val switch = MaterialSwitch(activity).apply {
                     showText = false
-                    scaleX = 0.82f
-                    scaleY = 0.82f
+                    scaleX = 0.68f
+                    scaleY = 0.68f
                     minimumHeight = 0
                     minHeight = 0
                     isChecked = when (currentValue) {
@@ -421,7 +422,9 @@ internal class BootstrapSettingsFormController(
                         topMargin = dp(6)
                     }
                 }
-                val inputLayout = TextInputLayout(activity).apply {
+                val inputLayout = TextInputLayout(
+                    ContextThemeWrapper(activity, R.style.Widget_SillyTavern_SettingsTextInputLayout_OutlinedBox)
+                ).apply {
                     hint = field.title
                     helperText = field.summary
                     boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
@@ -435,12 +438,11 @@ internal class BootstrapSettingsFormController(
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     )
                 }
-                val editText = TextInputEditText(inputLayout.context).apply {
+                val editText = TextInputEditText(
+                    ContextThemeWrapper(inputLayout.context, R.style.Widget_SillyTavern_SettingsTextInputEditText)
+                ).apply {
                     setText(formatFieldValue(field, currentValue))
                     inputType = resolveInputType(field.kind)
-                    textSize = 13f
-                    minHeight = dimen(R.dimen.stai_input_min_height)
-                    setPadding(dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical), dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical))
                     setHorizontallyScrolling(false)
                     when (field.kind) {
                         TavernConfigFieldKind.STRING_LIST,
@@ -513,7 +515,9 @@ internal class BootstrapSettingsFormController(
             gravity = Gravity.TOP
         }
 
-        val inputLayout = TextInputLayout(activity).apply {
+        val inputLayout = TextInputLayout(
+            ContextThemeWrapper(activity, R.style.Widget_SillyTavern_SettingsTextInputLayout_OutlinedBox)
+        ).apply {
             hint = field.title
             helperText = field.summary
             endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
@@ -527,12 +531,11 @@ internal class BootstrapSettingsFormController(
             )
         }
 
-        val editText = TextInputEditText(inputLayout.context).apply {
+        val editText = TextInputEditText(
+            ContextThemeWrapper(inputLayout.context, R.style.Widget_SillyTavern_SettingsTextInputEditText)
+        ).apply {
             setText(formatFieldValue(field, currentValue))
             inputType = resolveInputType(field.kind)
-            textSize = 13f
-            minHeight = dimen(R.dimen.stai_input_min_height)
-            setPadding(dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical), dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical))
             isSingleLine = true
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             setOnFocusChangeListener { focusedView, hasFocus ->

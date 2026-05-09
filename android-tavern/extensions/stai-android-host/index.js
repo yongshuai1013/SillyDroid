@@ -68,29 +68,39 @@ async function setLogsBubbleEnabled(enabled) {
     const bridge = getBridge();
     if (!bridge || typeof bridge.setFloatingLogsBubbleEnabled !== 'function') {
         showBridgeUnavailableToast();
-        return '安卓宿主桥不可用';
+        return {
+            updated: false,
+            summary: '安卓宿主桥不可用',
+        };
     }
 
     const updated = bridge.setFloatingLogsBubbleEnabled(enabled) === true;
     if (!updated) {
-        const failedMessage = enabled ? '暂时无法启用日志悬浮球。' : '暂时无法关闭日志悬浮球。';
+        const failedMessage = enabled ? '暂时无法启用调试日志球。' : '暂时无法关闭调试日志球。';
         toastr.warning(failedMessage, popupTitle);
-        return failedMessage;
+        return {
+            updated: false,
+            summary: failedMessage,
+        };
     }
 
     const info = getHostVersionInfo();
-    const message = enabled ? '已启用日志悬浮球。' : '已关闭日志悬浮球。';
+    const message = enabled ? '已启用调试日志球。' : '已关闭调试日志球。';
     if (enabled) {
         toastr.success(message, popupTitle);
     } else {
         toastr.info(message, popupTitle);
     }
 
-    return info ? formatVersionSummary(info) : message;
+    return {
+        updated: true,
+        summary: info ? formatVersionSummary(info) : message,
+    };
 }
 
 async function showLogsBubbleCommand() {
-    return setLogsBubbleEnabled(true);
+    const result = await setLogsBubbleEnabled(true);
+    return result.summary;
 }
 
 async function showVersionCommand() {
@@ -121,13 +131,20 @@ function buildInfoRow(label, value) {
     return row;
 }
 
+function applySwitchVisualState(toggle, knob, enabled) {
+    toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    toggle.style.background = enabled ? '#0f766e' : 'rgba(15, 118, 110, 0.18)';
+    toggle.style.borderColor = enabled ? '#0f766e' : 'rgba(15, 118, 110, 0.18)';
+    knob.style.transform = enabled ? 'translateX(18px)' : 'translateX(0)';
+}
+
 function buildSwitchRow(initialChecked) {
-    const row = document.createElement('label');
+    const row = document.createElement('div');
     row.style.display = 'flex';
     row.style.alignItems = 'center';
     row.style.justifyContent = 'space-between';
     row.style.gap = '12px';
-    row.style.padding = '10px 12px';
+    row.style.padding = '8px 10px';
     row.style.border = '1px solid rgba(15, 118, 110, 0.18)';
     row.style.borderRadius = '12px';
     row.style.background = 'rgba(15, 118, 110, 0.08)';
@@ -139,39 +156,67 @@ function buildSwitchRow(initialChecked) {
     textGroup.style.flex = '1';
 
     const title = document.createElement('strong');
-    title.textContent = '日志悬浮球';
+    title.textContent = '调试日志球';
     textGroup.appendChild(title);
 
     const summary = document.createElement('span');
-    summary.textContent = '打开后会在主界面右下角显示日志球，点击即可展开实时日志。';
+    summary.textContent = '打开后会在主界面右下角显示调试日志球，点击即可展开实时日志。';
     summary.style.fontSize = '0.92em';
     summary.style.opacity = '0.82';
     textGroup.appendChild(summary);
 
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = initialChecked;
-    input.style.width = '18px';
-    input.style.height = '18px';
-    input.style.flexShrink = '0';
-    input.style.cursor = 'pointer';
-    input.style.accentColor = '#0f766e';
-    input.addEventListener('change', async () => {
-        const requestedEnabled = input.checked;
-        input.disabled = true;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.setAttribute('role', 'switch');
+    toggle.style.position = 'relative';
+    toggle.style.width = '44px';
+    toggle.style.height = '26px';
+    toggle.style.flexShrink = '0';
+    toggle.style.border = '1px solid rgba(15, 118, 110, 0.18)';
+    toggle.style.borderRadius = '999px';
+    toggle.style.padding = '0';
+    toggle.style.cursor = 'pointer';
+    toggle.style.transition = 'background 160ms ease, border-color 160ms ease, opacity 160ms ease';
+
+    const knob = document.createElement('span');
+    knob.style.position = 'absolute';
+    knob.style.top = '3px';
+    knob.style.left = '3px';
+    knob.style.width = '18px';
+    knob.style.height = '18px';
+    knob.style.borderRadius = '999px';
+    knob.style.background = '#ffffff';
+    knob.style.boxShadow = '0 1px 3px rgba(15, 23, 42, 0.24)';
+    knob.style.transition = 'transform 160ms ease';
+    toggle.appendChild(knob);
+
+    let checked = initialChecked;
+    applySwitchVisualState(toggle, knob, checked);
+
+    toggle.addEventListener('click', async () => {
+        const requestedEnabled = !checked;
+        toggle.disabled = true;
+        toggle.style.opacity = '0.72';
+        applySwitchVisualState(toggle, knob, requestedEnabled);
         try {
-            await setLogsBubbleEnabled(requestedEnabled);
+            const result = await setLogsBubbleEnabled(requestedEnabled);
+            if (!result.updated) {
+                applySwitchVisualState(toggle, knob, checked);
+                return;
+            }
+            checked = requestedEnabled;
         } catch (error) {
-            console.error('安卓宿主：切换日志悬浮球失败', error);
-            input.checked = !requestedEnabled;
-            toastr.error('切换日志悬浮球失败。', popupTitle);
+            console.error('安卓宿主：切换调试日志球失败', error);
+            applySwitchVisualState(toggle, knob, checked);
+            toastr.error('切换调试日志球失败。', popupTitle);
         } finally {
-            input.disabled = false;
+            toggle.disabled = false;
+            toggle.style.opacity = '1';
         }
     });
 
     row.appendChild(textGroup);
-    row.appendChild(input);
+    row.appendChild(toggle);
     return row;
 }
 
@@ -184,7 +229,7 @@ function buildPopupContent(info) {
     const description = document.createElement('p');
     description.style.margin = '0';
     description.textContent = info
-        ? '这里可以直接查看宿主版本、打开宿主设置，并即时切换日志悬浮球。'
+        ? '这里可以直接查看宿主版本、打开宿主设置，并即时切换调试日志球。'
         : '当前页面无法连接安卓宿主桥。';
     wrapper.appendChild(description);
 
@@ -298,7 +343,7 @@ function registerSlashCommands() {
         returns: '状态消息',
         helpString: `
             <div>
-                启用并显示安卓日志悬浮球。
+                启用并显示安卓调试日志球。
             </div>
         `,
     }));

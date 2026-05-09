@@ -5,6 +5,7 @@
     <string name="bootstrap_idle">正在准备 SillyTavern Android 宿主环境。</string>
     <string name="bootstrap_progress_label">初始化进度 %1$d%%</string>
     <string name="bootstrap_progress_indeterminate">正在准备启动步骤…</string>
+    <string name="bootstrap_startup_tavern_log_tail">酒馆启动日志：%1$s</string>
     <string name="bootstrap_paused_message">本地 Tavern 服务已暂停。</string>
     <string name="bootstrap_paused_details">如需继续启动，请点击“继续启动”。</string>
     <string name="bootstrap_retry">重新尝试</string>
@@ -42,7 +43,7 @@
     <string name="bootstrap_settings_tab_about">关于</string>
     <string name="bootstrap_settings_data_summary">导入、导出和恢复默认放在这里。导入会自动识别官方用户备份 ZIP 和宿主全量数据 ZIP。</string>
     <string name="bootstrap_settings_host_options_title">宿主界面</string>
-    <string name="bootstrap_settings_host_floating_logs_title">显示日志悬浮球</string>
+    <string name="bootstrap_settings_host_floating_logs_title">调试日志球</string>
     <string name="bootstrap_settings_host_floating_logs_summary">在主界面右下角显示悬浮球，点击后可实时查看最新酒馆日志。该开关立即生效，不需要重新保存配置。</string>
     <string name="bootstrap_settings_host_floating_logs_refresh_title">日志刷新间隔</string>
     <string name="bootstrap_settings_host_floating_logs_refresh_summary">控制悬浮日志自动拉取频率。触摸日志窗口后会暂停自动滚动，回到底部会自动恢复。</string>
@@ -55,8 +56,6 @@
     <string name="bootstrap_settings_about_summary">这里集中显示当前宿主说明、版本信息和应用更新入口，主界面不再单独保留更新按钮。</string>
     <string name="bootstrap_settings_about_info_title">应用信息</string>
     <string name="bootstrap_settings_about_info_body">SillyTavern Android 宿主负责在本机启动 Tavern 服务、管理扩展和执行完整数据迁移。关于页会集中展示宿主信息、运行时来源和更新状态，不会直接改动当前 Tavern 配置。</string>
-    <string name="bootstrap_settings_about_license_title">Termux 与第三方许可证</string>
-    <string name="bootstrap_settings_about_license_body">当前 Android 运行时基于 Termux 生态的 prefix、bootstrap 约定和部分运行时资源构建。分发或二次打包时，请同时保留 Termux 及其他上游组件的版权声明与许可证文本。Termux app 上游仓库采用 GPLv3 only，具体例外与第三方说明见仓库根目录的 THIRD_PARTY_NOTICES.md。</string>
     <string name="bootstrap_settings_about_version_title">版本信息</string>
     <string name="bootstrap_settings_about_version_apk">APK版本：%1$s</string>
     <string name="bootstrap_settings_about_version_code">APK版本号：%1$s</string>

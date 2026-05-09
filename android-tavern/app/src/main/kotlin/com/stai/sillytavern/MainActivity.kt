@@ -15,6 +15,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Message
 import android.os.Environment
 import android.provider.MediaStore
@@ -138,6 +139,9 @@ class MainActivity : AppCompatActivity() {
     private var isOpeningBootstrapSettings = false
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var floatingLogsRefreshJob: Job? = null
+    private var floatingLogsRealtimeRenderJob: Job? = null
+    private var floatingLogsRealtimeRenderPending = false
+    private var floatingLogsFileObserver: FileObserver? = null
     private var lastFloatingLogSnapshot: HostLogSnapshot? = null
     private var floatingLogsAvailableEntries: List<HostLogEntry> = emptyList()
     private var floatingLogsSelectedLogPath: String? = null
@@ -149,7 +153,11 @@ class MainActivity : AppCompatActivity() {
     private val floatingLogsBubbleRevealInterpolator = OvershootInterpolator(0.9f)
     private val floatingLogsBubbleDockInterpolator = OvershootInterpolator(0.55f)
 
-    private data class FloatingLogsPanelSize(val width: Int, val height: Int)
+    private data class FloatingLogsPanelSize(
+        val width: Int,
+        val height: Int,
+        val layoutChanged: Boolean
+    )
     private val hostConfigStore by lazy { BootstrapHostConfigStore(this) }
     private lateinit var appUpdateCoordinator: AppUpdateCoordinator
     private val webSessionStoragePreferences by lazy {
@@ -466,12 +474,14 @@ class MainActivity : AppCompatActivity() {
             return null
         }
         val layoutParams = floatingLogsPanel.layoutParams
+        var layoutChanged = false
         if (layoutParams.width != targetWidth || layoutParams.height != targetHeight) {
             layoutParams.width = targetWidth
             layoutParams.height = targetHeight
             floatingLogsPanel.layoutParams = layoutParams
+            layoutChanged = true
         }
-        return FloatingLogsPanelSize(width = targetWidth, height = targetHeight)
+        return FloatingLogsPanelSize(width = targetWidth, height = targetHeight, layoutChanged = layoutChanged)
     }
 
     private fun moveFloatingLogsBubbleTo(targetX: Float, targetY: Float) {
@@ -625,14 +635,22 @@ class MainActivity : AppCompatActivity() {
                 return@post
             }
             val panelSize = updateFloatingLogsPanelLayout() ?: return@post
+            if (panelSize.layoutChanged) {
+                floatingLogsPanel.post {
+                    repositionFloatingLogsPanel(onPositioned)
+                }
+                return@post
+            }
             if (floatingLogsBubble.width <= 0 || floatingLogsBubble.height <= 0) {
                 return@post
             }
 
-            val minX = contentRoot.paddingLeft.toFloat()
-            val maxX = (contentRoot.width - contentRoot.paddingRight - panelSize.width).toFloat().coerceAtLeast(minX)
-            val minY = contentRoot.paddingTop.toFloat()
-            val maxY = (contentRoot.height - contentRoot.paddingBottom - panelSize.height).toFloat().coerceAtLeast(minY)
+            val horizontalInset = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_horizontal_margin) / 2f
+            val verticalInset = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_vertical_margin) / 2f
+            val minX = contentRoot.paddingLeft + horizontalInset
+            val maxX = (contentRoot.width - contentRoot.paddingRight - panelSize.width - horizontalInset).toFloat().coerceAtLeast(minX)
+            val minY = contentRoot.paddingTop + verticalInset
+            val maxY = (contentRoot.height - contentRoot.paddingBottom - panelSize.height - verticalInset).toFloat().coerceAtLeast(minY)
 
             val preferredX = floatingLogsBubble.x + (floatingLogsBubble.width - panelSize.width) / 2f
             val preferredAboveY = floatingLogsBubble.y - panelSize.height - floatingLogsPanelGapPx
@@ -650,7 +668,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startFloatingLogsRefreshLoop() {
-        if (floatingLogsRefreshJob?.isActive == true) {
+        stopFloatingLogsRefreshLoop()
+        if (!floatingLogsPanel.isVisible) {
+            return
+        }
+
+        if (hostConfigStore.floatingLogRefreshIntervalMillis == BootstrapHostConfigStore.floatingLogRefreshIntervalRealtimeMillis) {
+            startFloatingLogsRealtimeObserver()
+            requestFloatingLogsRealtimeRefresh()
             return
         }
 
@@ -665,6 +690,74 @@ class MainActivity : AppCompatActivity() {
     private fun stopFloatingLogsRefreshLoop() {
         floatingLogsRefreshJob?.cancel()
         floatingLogsRefreshJob = null
+        floatingLogsRealtimeRenderJob?.cancel()
+        floatingLogsRealtimeRenderJob = null
+        floatingLogsRealtimeRenderPending = false
+        floatingLogsFileObserver?.stopWatching()
+        floatingLogsFileObserver = null
+    }
+
+    private fun startFloatingLogsRealtimeObserver() {
+        if (floatingLogsFileObserver != null) {
+            return
+        }
+
+        val logsDir = File(filesDir, "android-tavern/logs").apply {
+            mkdirs()
+        }
+        val mask = FileObserver.CREATE or FileObserver.MODIFY or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.DELETE
+        floatingLogsFileObserver = object : FileObserver(logsDir, mask) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != null) {
+                    val selectedFileName = floatingLogsSelectedLogPath?.let { File(it).name }
+                    if (selectedFileName != null) {
+                        if (!path.equals(selectedFileName, ignoreCase = true)) {
+                            return
+                        }
+                    } else if (!path.endsWith(".log", ignoreCase = true)) {
+                        return
+                    }
+                }
+
+                contentRoot.post {
+                    if (floatingLogsPanel.isVisible &&
+                        hostConfigStore.floatingLogRefreshIntervalMillis == BootstrapHostConfigStore.floatingLogRefreshIntervalRealtimeMillis
+                    ) {
+                        requestFloatingLogsRealtimeRefresh()
+                    }
+                }
+            }
+        }.also { observer ->
+            observer.startWatching()
+        }
+    }
+
+    private fun requestFloatingLogsRealtimeRefresh(resetAutoScroll: Boolean = false) {
+        if (resetAutoScroll) {
+            floatingLogsAutoScrollEnabled = true
+        }
+        if (!floatingLogsPanel.isVisible) {
+            return
+        }
+
+        if (floatingLogsRealtimeRenderJob?.isActive == true) {
+            floatingLogsRealtimeRenderPending = true
+            return
+        }
+
+        floatingLogsRealtimeRenderJob = lifecycleScope.launch {
+            renderFloatingLatestLog()
+        }.also { job ->
+            job.invokeOnCompletion {
+                floatingLogsRealtimeRenderJob = null
+                if (floatingLogsRealtimeRenderPending) {
+                    floatingLogsRealtimeRenderPending = false
+                    contentRoot.post {
+                        requestFloatingLogsRealtimeRefresh()
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun renderFloatingLatestLog() {
@@ -755,6 +848,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshFloatingLogsNow(resetAutoScroll: Boolean = false) {
+        if (hostConfigStore.floatingLogRefreshIntervalMillis == BootstrapHostConfigStore.floatingLogRefreshIntervalRealtimeMillis) {
+            requestFloatingLogsRealtimeRefresh(resetAutoScroll)
+            return
+        }
         if (resetAutoScroll) {
             floatingLogsAutoScrollEnabled = true
         }

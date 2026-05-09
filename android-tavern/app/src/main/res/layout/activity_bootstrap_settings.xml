@@ -49,11 +49,11 @@
             android:layout_marginStart="@dimen/stai_space_md"
             android:layout_marginTop="@dimen/stai_space_xxxs"
             android:layout_marginEnd="@dimen/stai_space_md"
-            android:paddingLeft="@dimen/stai_space_lg"
-            android:paddingTop="@dimen/stai_space_md"
-            android:paddingRight="@dimen/stai_space_lg"
-            android:paddingBottom="@dimen/stai_space_md"
-            android:textSize="11sp"
+            android:paddingLeft="@dimen/stai_space_md"
+            android:paddingTop="@dimen/stai_space_sm"
+            android:paddingRight="@dimen/stai_space_md"
+            android:paddingBottom="@dimen/stai_space_sm"
+            android:textSize="10sp"
             android:visibility="gone" />
 
         <com.google.android.material.tabs.TabLayout
@@ -127,7 +127,7 @@
             android:paddingStart="@dimen/stai_space_md"
             android:paddingTop="@dimen/stai_space_sm"
             android:paddingEnd="@dimen/stai_space_md"
-            android:paddingBottom="@dimen/stai_space_xl">
+            android:paddingBottom="@dimen/stai_space_lg">
 
             <LinearLayout
                 android:id="@+id/bootstrapSettingsDataPanel"
@@ -139,7 +139,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurface"
-                    app:cardCornerRadius="18dp"
+                    app:cardCornerRadius="16dp"
                     app:cardElevation="0dp"
                     app:strokeColor="?attr/colorOutlineVariant"
                     app:strokeWidth="1dp">
@@ -148,10 +148,10 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="10dp">
+                        android:paddingStart="8dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp">
 
                         <TextView
                             android:id="@+id/bootstrapSettingsSummary"
@@ -159,7 +159,7 @@
                             android:layout_height="wrap_content"
                             android:text="@string/bootstrap_settings_data_summary"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <LinearLayout
                             android:id="@+id/bootstrapSettingsQuickFieldContainer"
@@ -183,10 +183,10 @@
                                 android:layout_height="wrap_content"
                                 android:gravity="center_vertical"
                                 android:orientation="horizontal"
-                                android:paddingStart="10dp"
-                                android:paddingTop="10dp"
-                                android:paddingEnd="10dp"
-                                android:paddingBottom="10dp">
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp">
 
                                 <LinearLayout
                                     android:layout_width="0dp"
@@ -195,27 +195,32 @@
                                     android:orientation="vertical">
 
                                     <TextView
+                                        style="@style/TextAppearance.SillyTavern.SettingsCardTitle"
                                         android:layout_width="match_parent"
                                         android:layout_height="wrap_content"
                                         android:text="@string/bootstrap_settings_host_floating_logs_title"
                                         android:textColor="?attr/colorOnSurface"
-                                        android:textSize="12sp"
                                         android:textStyle="bold" />
 
                                     <TextView
+                                        style="@style/TextAppearance.SillyTavern.SettingsBody"
                                         android:layout_width="match_parent"
                                         android:layout_height="wrap_content"
                                         android:layout_marginTop="3dp"
                                         android:text="@string/bootstrap_settings_host_floating_logs_summary"
-                                        android:textColor="?attr/colorOnSurfaceVariant"
-                                        android:textSize="10sp" />
+                                        android:textColor="?attr/colorOnSurfaceVariant" />
                                 </LinearLayout>
 
                                 <com.google.android.material.materialswitch.MaterialSwitch
                                     android:id="@+id/bootstrapSettingsFloatingLogsSwitch"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:layout_marginStart="12dp" />
+                                    android:layout_marginStart="8dp"
+                                    android:minHeight="0dp"
+                                    android:minWidth="0dp"
+                                    android:scaleX="0.68"
+                                    android:scaleY="0.68"
+                                    android:showText="false" />
                             </LinearLayout>
                         </com.google.android.material.card.MaterialCardView>
 
@@ -250,7 +255,7 @@
                             android:layout_marginTop="8dp"
                             android:text="@string/bootstrap_settings_actions_title"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="13sp"
+                            android:textSize="12sp"
                             android:textStyle="bold" />
 
                         <LinearLayout
@@ -285,7 +290,7 @@
                             android:layout_marginTop="8dp"
                             android:text="@string/bootstrap_settings_clear_data_warning"
                             android:textColor="?attr/colorError"
-                            android:textSize="10sp"
+                            android:textSize="9sp"
                             android:textStyle="bold" />
 
                         <com.google.android.material.button.MaterialButton
@@ -312,17 +317,17 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:orientation="vertical"
-                                android:paddingStart="10dp"
-                                android:paddingTop="10dp"
-                                android:paddingEnd="10dp"
-                                android:paddingBottom="10dp">
+                                android:paddingStart="8dp"
+                                android:paddingTop="8dp"
+                                android:paddingEnd="8dp"
+                                android:paddingBottom="8dp">
 
                                 <TextView
                                     android:layout_width="match_parent"
                                     android:layout_height="wrap_content"
                                     android:text="@string/bootstrap_settings_import_formats_title"
                                     android:textColor="?attr/colorOnSecondaryContainer"
-                                    android:textSize="11sp"
+                                    android:textSize="10sp"
                                     android:textStyle="bold" />
 
                                 <TextView
@@ -332,7 +337,7 @@
                                     android:lineSpacingExtra="1dp"
                                     android:text="@string/bootstrap_settings_import_formats_summary"
                                     android:textColor="?attr/colorOnSecondaryContainer"
-                                    android:textSize="10sp" />
+                                    android:textSize="9sp" />
 
                                 <TextView
                                     android:layout_width="match_parent"
@@ -340,7 +345,7 @@
                                     android:layout_marginTop="8dp"
                                     android:text="@string/bootstrap_settings_backup_guide_title"
                                     android:textColor="?attr/colorOnSecondaryContainer"
-                                    android:textSize="11sp"
+                                    android:textSize="10sp"
                                     android:textStyle="bold" />
 
                                 <TextView
@@ -350,7 +355,7 @@
                                     android:lineSpacingExtra="1dp"
                                     android:text="@string/bootstrap_settings_backup_guide_summary"
                                     android:textColor="?attr/colorOnSecondaryContainer"
-                                    android:textSize="10sp" />
+                                    android:textSize="9sp" />
                             </LinearLayout>
                         </com.google.android.material.card.MaterialCardView>
                     </LinearLayout>
@@ -368,7 +373,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurface"
-                    app:cardCornerRadius="18dp"
+                    app:cardCornerRadius="16dp"
                     app:cardElevation="0dp"
                     app:strokeColor="?attr/colorOutlineVariant"
                     app:strokeWidth="1dp">
@@ -377,10 +382,10 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="10dp">
+                        android:paddingStart="8dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -389,30 +394,40 @@
                             android:orientation="horizontal">
 
                             <TextView
+                                style="@style/TextAppearance.SillyTavern.SettingsSectionTitle"
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="@string/bootstrap_settings_tab_extensions"
                                 android:textColor="?attr/colorOnSurface"
-                                android:textSize="13sp"
                                 android:textStyle="bold" />
 
-                            <com.google.android.material.button.MaterialButton
+                            <ImageButton
                                 android:id="@+id/bootstrapSettingsExtensionsInstallButton"
-                                style="@style/Widget.SillyTavern.SettingsButton.Outlined"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginEnd="8dp"
-                                android:minHeight="@dimen/stai_control_min_height"
-                                android:text="@string/bootstrap_settings_extensions_install" />
+                                android:layout_width="@dimen/stai_settings_dense_icon_button_size"
+                                android:layout_height="@dimen/stai_settings_dense_icon_button_size"
+                                android:layout_marginEnd="4dp"
+                                android:background="?attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="@string/bootstrap_settings_extensions_install"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:padding="@dimen/stai_settings_dense_icon_button_padding"
+                                android:scaleType="centerInside"
+                                android:src="@drawable/ic_add"
+                                android:tint="?attr/colorPrimary" />
 
-                            <com.google.android.material.button.MaterialButton
+                            <ImageButton
                                 android:id="@+id/bootstrapSettingsExtensionsReloadButton"
-                                style="@style/Widget.SillyTavern.SettingsButton.Outlined"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:minHeight="@dimen/stai_control_min_height"
-                                android:text="@string/bootstrap_settings_extensions_reload" />
+                                android:layout_width="@dimen/stai_settings_dense_icon_button_size"
+                                android:layout_height="@dimen/stai_settings_dense_icon_button_size"
+                                android:background="?attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="@string/bootstrap_settings_extensions_reload"
+                                android:minWidth="0dp"
+                                android:minHeight="0dp"
+                                android:padding="@dimen/stai_settings_dense_icon_button_padding"
+                                android:scaleType="centerInside"
+                                android:src="@drawable/ic_restore_defaults"
+                                android:tint="?attr/colorOnSurfaceVariant" />
                         </LinearLayout>
 
                         <TextView
@@ -421,13 +436,13 @@
                             android:layout_marginTop="4dp"
                             android:text="@string/bootstrap_settings_extensions_summary"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <com.google.android.material.progressindicator.LinearProgressIndicator
                             android:id="@+id/bootstrapSettingsExtensionsProgress"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:visibility="gone" />
 
                         <TextView
@@ -436,22 +451,22 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp"
+                            android:textSize="10sp"
                             android:visibility="gone" />
 
                         <TextView
                             android:id="@+id/bootstrapSettingsExtensionsEmpty"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:background="?attr/colorSurfaceContainerHigh"
-                            android:paddingLeft="10dp"
-                            android:paddingTop="10dp"
-                            android:paddingRight="10dp"
-                            android:paddingBottom="10dp"
+                            android:paddingLeft="8dp"
+                            android:paddingTop="8dp"
+                            android:paddingRight="8dp"
+                            android:paddingBottom="8dp"
                             android:text="@string/bootstrap_settings_extensions_empty"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp"
+                            android:textSize="10sp"
                             android:visibility="gone" />
 
                         <LinearLayout
@@ -475,7 +490,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurface"
-                    app:cardCornerRadius="18dp"
+                    app:cardCornerRadius="16dp"
                     app:cardElevation="0dp"
                     app:strokeColor="?attr/colorOutlineVariant"
                     app:strokeWidth="1dp">
@@ -484,10 +499,10 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="10dp">
+                        android:paddingStart="8dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -499,13 +514,13 @@
                                 android:layout_height="wrap_content"
                                 android:text="@string/bootstrap_settings_tab_logs"
                                 android:textColor="?attr/colorOnSurface"
-                                android:textSize="13sp"
+                                android:textSize="12sp"
                                 android:textStyle="bold" />
 
                             <LinearLayout
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="10dp"
+                                android:layout_marginTop="8dp"
                                 android:gravity="start"
                                 android:orientation="horizontal">
 
@@ -514,7 +529,7 @@
                                     style="@style/Widget.SillyTavern.SettingsButton.Outlined"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:layout_marginEnd="8dp"
+                                    android:layout_marginEnd="6dp"
                                     android:minHeight="@dimen/stai_control_min_height"
                                     android:text="@string/bootstrap_settings_logs_select" />
 
@@ -523,7 +538,7 @@
                                     style="@style/Widget.SillyTavern.SettingsButton.Outlined"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:layout_marginEnd="8dp"
+                                    android:layout_marginEnd="6dp"
                                     android:minHeight="@dimen/stai_control_min_height"
                                     android:text="@string/bootstrap_settings_logs_export" />
 
@@ -543,15 +558,15 @@
                             android:layout_marginTop="4dp"
                             android:text="@string/bootstrap_settings_logs_summary"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <TextView
                             android:id="@+id/bootstrapSettingsLogsMeta"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="11sp"
+                            android:textSize="10sp"
                             android:textStyle="bold"
                             android:visibility="gone" />
 
@@ -559,15 +574,15 @@
                             android:id="@+id/bootstrapSettingsLogsEmpty"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:background="?attr/colorSurfaceContainerHigh"
-                            android:paddingLeft="10dp"
-                            android:paddingTop="10dp"
-                            android:paddingRight="10dp"
-                            android:paddingBottom="10dp"
+                            android:paddingLeft="8dp"
+                            android:paddingTop="8dp"
+                            android:paddingRight="8dp"
+                            android:paddingBottom="8dp"
                             android:text="@string/bootstrap_settings_logs_empty"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp"
+                            android:textSize="10sp"
                             android:visibility="gone" />
 
                         <TextView
@@ -578,13 +593,13 @@
                             android:background="?attr/colorSurfaceContainerHigh"
                             android:fontFamily="monospace"
                             android:lineSpacingExtra="1dp"
-                            android:paddingLeft="10dp"
-                            android:paddingTop="10dp"
-                            android:paddingRight="10dp"
-                            android:paddingBottom="10dp"
+                            android:paddingLeft="8dp"
+                            android:paddingTop="8dp"
+                            android:paddingRight="8dp"
+                            android:paddingBottom="8dp"
                             android:textColor="?attr/colorOnSurfaceVariant"
                             android:textIsSelectable="true"
-                            android:textSize="10sp"
+                            android:textSize="9sp"
                             android:visibility="gone" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
@@ -601,7 +616,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
-                    android:minHeight="36dp"
+                    android:minHeight="@dimen/stai_control_min_height"
                     android:orientation="horizontal">
 
                     <TextView
@@ -610,19 +625,19 @@
                         android:layout_weight="1"
                         android:text="@string/bootstrap_settings_sections_title"
                         android:textColor="?attr/colorOnSurface"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:textStyle="bold" />
 
                     <ImageButton
                         android:id="@+id/bootstrapSettingsRestoreDefaultsButton"
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
+                        android:layout_width="@dimen/stai_settings_dense_icon_button_size"
+                        android:layout_height="@dimen/stai_settings_dense_icon_button_size"
                         android:layout_gravity="center_vertical"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="@string/bootstrap_settings_restore_defaults"
                         android:minWidth="0dp"
                         android:minHeight="0dp"
-                        android:padding="5dp"
+                        android:padding="@dimen/stai_settings_dense_icon_button_padding"
                         android:scaleType="centerInside"
                         android:src="@drawable/ic_restore_defaults"
                         android:tint="?attr/colorOnSurfaceVariant" />
@@ -635,7 +650,7 @@
                     android:layout_marginBottom="6dp"
                     android:text="@string/bootstrap_settings_settings_summary"
                     android:textColor="?attr/colorOnSurfaceVariant"
-                    android:textSize="11sp" />
+                    android:textSize="10sp" />
 
                 <LinearLayout
                     android:id="@+id/bootstrapSettingsSectionContainer"
@@ -655,7 +670,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:cardBackgroundColor="?attr/colorSurface"
-                    app:cardCornerRadius="18dp"
+                    app:cardCornerRadius="16dp"
                     app:cardElevation="0dp"
                     app:strokeColor="?attr/colorOutlineVariant"
                     app:strokeWidth="1dp">
@@ -664,17 +679,17 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="10dp">
+                        android:paddingStart="8dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp">
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/bootstrap_settings_tab_about"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="13sp"
+                            android:textSize="12sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -684,15 +699,15 @@
                             android:lineSpacingExtra="1dp"
                             android:text="@string/bootstrap_settings_about_summary"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:text="@string/bootstrap_settings_about_info_title"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="12sp"
+                            android:textSize="11sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -702,33 +717,15 @@
                             android:lineSpacingExtra="1dp"
                             android:text="@string/bootstrap_settings_about_info_body"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
-                            android:text="@string/bootstrap_settings_about_license_title"
-                            android:textColor="?attr/colorOnSurface"
-                            android:textSize="12sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:lineSpacingExtra="1dp"
-                            android:text="@string/bootstrap_settings_about_license_body"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:text="@string/bootstrap_settings_about_version_title"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="12sp"
+                            android:textSize="11sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -739,16 +736,16 @@
                             android:fontFamily="monospace"
                             android:lineSpacingExtra="1dp"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="8dp"
                     app:cardBackgroundColor="?attr/colorSurface"
-                    app:cardCornerRadius="18dp"
+                    app:cardCornerRadius="16dp"
                     app:cardElevation="0dp"
                     app:strokeColor="?attr/colorOutlineVariant"
                     app:strokeWidth="1dp">
@@ -757,17 +754,17 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:paddingStart="10dp"
-                        android:paddingTop="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingBottom="10dp">
+                        android:paddingStart="8dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="8dp">
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/bootstrap_settings_about_update_title"
                             android:textColor="?attr/colorOnSurface"
-                            android:textSize="12sp"
+                            android:textSize="11sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -777,14 +774,14 @@
                             android:layout_marginTop="4dp"
                             android:lineSpacingExtra="1dp"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp" />
+                            android:textSize="10sp" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/bootstrapSettingsAboutUpdateButton"
                             style="@style/Widget.SillyTavern.SettingsButton.Outlined"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
+                            android:layout_marginTop="8dp"
                             android:minHeight="@dimen/stai_control_min_height"
                             android:text="@string/bootstrap_settings_about_update_action_check" />
                     </LinearLayout>
