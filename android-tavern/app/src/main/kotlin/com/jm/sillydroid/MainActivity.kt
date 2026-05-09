@@ -138,6 +138,11 @@ class MainActivity : AppCompatActivity() {
     private var loadedUrl = ""
     private var hasRestoredWebViewState = false
     private var isOpeningBootstrapSettings = false
+    // 首次解包完成后该文件存在，用来判断"曾经初始化过"，进而决定设置按钮是否可用。
+    // 用 lazy 避免在 onCreate 之前访问 filesDir。
+    private val isBootstrapPreviouslyCompleted: Boolean by lazy {
+        File(HostPaths.from(this).serverDir, "bootstrap-manifest.json").isFile
+    }
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var floatingLogsRefreshJob: Job? = null
     private var floatingLogsRealtimeRenderJob: Job? = null
@@ -342,11 +347,14 @@ class MainActivity : AppCompatActivity() {
                             if (!dragging && !longPressTriggered) {
                                 longPressTriggered = true
                                 val phase = StartupRuntimeStore.state.value.phase
-                                val settingsAllowedPhases = setOf(
-                                    StartupPhase.PAUSING, StartupPhase.CONFIGURING,
-                                    StartupPhase.ERROR, StartupPhase.BLOCKED
+                                val isExtracting = phase == StartupPhase.EXTRACTING
+                                val settingsAvailable = !isExtracting && (
+                                    isBootstrapPreviouslyCompleted || phase in setOf(
+                                        StartupPhase.PAUSING, StartupPhase.CONFIGURING,
+                                        StartupPhase.ERROR, StartupPhase.BLOCKED
+                                    )
                                 )
-                                if (phase in settingsAllowedPhases) {
+                                if (settingsAvailable) {
                                     openBootstrapSettings()
                                 }
                             }
@@ -1886,15 +1894,21 @@ class MainActivity : AppCompatActivity() {
         }
         bootstrapProgress.isVisible = !state.canRetry && state.phase != StartupPhase.CONFIGURING
         bootstrapProgressLabel.isVisible = bootstrapProgress.isVisible
-        // 解包/启动进行中时禁用设置入口，避免并发读写文件目录导致崩溃。
-        // IDLE 表示从未解包过（全新安装），此时 server 目录不存在，也不允许打开设置。
-        // 只有解包完成后处于静止状态（等待配置、出错、被阻塞）时才允许打开设置。
-        val settingsAllowedPhases = setOf(
-            StartupPhase.PAUSING, StartupPhase.CONFIGURING,
-            StartupPhase.ERROR, StartupPhase.BLOCKED
+        // 规则：
+        // 1. EXTRACTING 阶段（正在解包 rootfs/server）：无论是否初始化过都禁用，避免并发踩踏。
+        // 2. 曾经初始化过（server 已解包）且非 EXTRACTING：允许打开设置。
+        // 3. 全新安装：只有进入静止状态（等待配置/出错/被阻塞）才允许。
+        val isExtracting = state.phase == StartupPhase.EXTRACTING
+        val settingsAvailable = !isExtracting && (
+            isBootstrapPreviouslyCompleted || state.phase in setOf(
+                StartupPhase.PAUSING, StartupPhase.CONFIGURING,
+                StartupPhase.ERROR, StartupPhase.BLOCKED
+            )
         )
         bootstrapSettingsButton.isVisible = !state.isReady
-        bootstrapSettingsButton.isEnabled = !state.isReady && !isOpeningBootstrapSettings && state.phase in settingsAllowedPhases
+        val settingsEnabled = !state.isReady && !isOpeningBootstrapSettings && settingsAvailable
+        bootstrapSettingsButton.isEnabled = settingsEnabled
+        bootstrapSettingsButton.alpha = if (settingsEnabled) 1f else 0.35f
         bootstrapProgress.max = 100
         val progressPercent = state.progressPercent.coerceIn(0, 100)
         bootstrapProgress.isIndeterminate = progressPercent <= 0
