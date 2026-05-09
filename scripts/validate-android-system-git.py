@@ -8,7 +8,11 @@ import shlex
 import subprocess
 import sys
 import textwrap
+import time
 from dataclasses import dataclass
+
+
+TERMUX_GUEST_PREFIX = "/data/data/com.termux/files/usr"
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,10 @@ class AdbContext:
         return f"{self.app_root}/files/usr/tmp"
 
     @property
+    def host_prefix_dir(self) -> str:
+        return f"{self.app_root}/files/usr"
+
+    @property
     def start_server_script(self) -> str:
         return f"{self.app_root}/files/android-tavern/bootstrap/scripts/start-server.sh"
 
@@ -59,8 +67,16 @@ class AdbContext:
         return f"{self.native_lib_dir}/libproot-loader32.so"
 
     @property
-    def rootfs_libatomic(self) -> str:
-        return f"{self.rootfs_dir}/fs/usr/lib/aarch64-linux-gnu/libatomic.so.1"
+    def rootfs_manifest(self) -> str:
+        return f"{self.rootfs_dir}/rootfs-manifest.json"
+
+    @property
+    def android_resolv_conf(self) -> str:
+        return f"{self.rootfs_dir}/android-resolv.conf"
+
+    @property
+    def startup_log(self) -> str:
+        return f"{self.logs_dir}/startup.log"
 
 
 def build_adb_command(serial: str | None, *args: str) -> list[str]:
@@ -164,12 +180,12 @@ def build_probe_script(context: AdbContext, repo_url: str, branch: str | None, p
         "#!/bin/sh",
         "set -eu",
         "cd /tavern/server",
-        "if [ -f ./dependency-env.sh ]; then",
-        "    . ./dependency-env.sh",
+        'if [ -n "${HOST_RUNTIME_PREFIX:-}" ]; then',
+        '    PATH="$HOST_RUNTIME_PREFIX/bin:$PATH"',
         "fi",
-        'NODE_BIN="${TAVERN_NODE_BIN:-./node/bin/node}"',
-        'if [ ! -x "$NODE_BIN" ]; then',
-        '    NODE_BIN="$(command -v node || true)"',
+        'NODE_BIN="$(command -v node || true)"',
+        'if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then',
+        '    NODE_BIN="${TAVERN_NODE_BIN:-./node/bin/node}"',
         "fi",
         'if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then',
         '    echo "missing node" >&2',
@@ -193,6 +209,8 @@ def build_probe_script(context: AdbContext, repo_url: str, branch: str | None, p
         export SERVER_DIR={quoted(context.server_dir)}
         export APP_DATA_ROOT={quoted(context.app_data_root)}
         export LOGS_DIR={quoted(context.logs_dir)}
+        export HOST_PREFIX_DIR={quoted(context.host_prefix_dir)}
+        export HOST_RUNTIME_PREFIX={quoted(TERMUX_GUEST_PREFIX)}
         export TAVERN_PORT={port}
         export HOST_PROOT_BIN={quoted(context.host_proot_bin)}
         export HOST_PROOT_LIB_DIR={quoted(context.native_lib_dir)}
@@ -208,6 +226,75 @@ def ensure_remote_file_exists(context: AdbContext, remote_path: str) -> None:
     run_adb(context.serial, "shell", "run-as", context.package_name, "ls", remote_path)
 
 
+def remote_path_exists(context: AdbContext, remote_path: str) -> bool:
+    completed = run_adb(
+        context.serial,
+        "shell",
+        "run-as",
+        context.package_name,
+        "ls",
+        remote_path,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def read_remote_text(context: AdbContext, remote_path: str) -> str:
+    completed = run_adb(
+        context.serial,
+        "shell",
+        "run-as",
+        context.package_name,
+        "cat",
+        remote_path,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout
+
+
+def extract_startup_log_tail(context: AdbContext, max_lines: int = 12) -> str:
+    startup_log = read_remote_text(context, context.startup_log).strip()
+    if not startup_log:
+        return ""
+    lines = [line.rstrip() for line in startup_log.splitlines() if line.strip()]
+    return "\n".join(lines[-max_lines:])
+
+
+def wait_for_bootstrap_ready(context: AdbContext, timeout_seconds: int) -> None:
+    required_paths = [
+        context.start_server_script,
+        context.server_entrypoint,
+        context.host_prefix_dir,
+        context.rootfs_manifest,
+        context.android_resolv_conf,
+    ]
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        missing_paths = [path for path in required_paths if not remote_path_exists(context, path)]
+        if not missing_paths:
+            return
+
+        startup_tail = extract_startup_log_tail(context)
+        if "state=BLOCKED" in startup_tail or "state=ERROR" in startup_tail:
+            raise RuntimeError(
+                "Bootstrap entered a failure state before validation.\n"
+                f"Missing paths: {missing_paths}\n"
+                f"startup.log tail:\n{startup_tail}"
+            )
+
+        time.sleep(1.0)
+
+    startup_tail = extract_startup_log_tail(context)
+    raise RuntimeError(
+        "Timed out waiting for Android bootstrap to finish before validation.\n"
+        f"Missing paths: {[path for path in required_paths if not remote_path_exists(context, path)]}\n"
+        f"startup.log tail:\n{startup_tail}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="在真机上通过真实 start-server 链路验证 Node 对系统 git 的调用是否可用。"
@@ -221,6 +308,7 @@ def main() -> int:
     )
     parser.add_argument("--branch", help="可选：额外验证某个远端分支是否能被 ls-remote 命中。")
     parser.add_argument("--port", type=int, default=7889, help="探针运行时使用的临时 Tavern 端口。")
+    parser.add_argument("--timeout", type=int, default=300, help="等待 Android bootstrap 就绪的超时时间（秒）。")
     args = parser.parse_args()
 
     context = AdbContext(
@@ -230,14 +318,20 @@ def main() -> int:
         native_lib_dir=resolve_native_lib_dir(args.serial, args.package),
     )
 
+    wait_for_bootstrap_ready(context, args.timeout)
+
     ensure_remote_file_exists(context, context.start_server_script)
     ensure_remote_file_exists(context, context.server_entrypoint)
-    ensure_remote_file_exists(context, context.rootfs_libatomic)
+    ensure_remote_file_exists(context, context.host_prefix_dir)
+    ensure_remote_file_exists(context, context.rootfs_manifest)
+    ensure_remote_file_exists(context, context.android_resolv_conf)
 
     print(f"package={context.package_name}")
     print(f"app_root={context.app_root}")
     print(f"native_lib_dir={context.native_lib_dir}")
-    print(f"rootfs_libatomic={context.rootfs_libatomic}")
+    print(f"host_prefix_dir={context.host_prefix_dir}")
+    print(f"rootfs_manifest={context.rootfs_manifest}")
+    print(f"android_resolv_conf={context.android_resolv_conf}")
 
     probe_result = run_adb(
         context.serial,

@@ -276,7 +276,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             saveStartButton = saveStartButton,
             onTabChanged = { index ->
                 if (this::extensionsCoordinator.isInitialized && index == 1) {
-                    extensionsCoordinator.reloadExtensions()
+                    extensionsCoordinator.reloadExtensions(promptDefaultInstall = true)
                 } else if (this::logsCoordinator.isInitialized && index == 2) {
                     logsCoordinator.reloadLatestLog()
                 }

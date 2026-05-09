@@ -1373,6 +1373,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun setFloatingLogsBubbleEnabled(enabled: Boolean): Boolean {
+            if (isFinishing || isDestroyed) {
+                return false
+            }
+
+            runOnUiThread {
+                hostConfigStore.floatingLogBubbleEnabled = enabled
+                refreshFloatingLogsVisibility()
+                if (enabled) {
+                    revealFloatingLogsBubble(animated = true)
+                }
+            }
+            return true
+        }
+
+        @JavascriptInterface
         fun getHostVersionInfo(): String {
             return buildAndroidHostVersionInfoJson()
         }

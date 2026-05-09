@@ -1,6 +1,9 @@
 artifacts/
 .vs/
 .vscode/
+tmp/
+__pycache__/
+*.pyc
 
 android-tavern/local.properties
 android-tavern/.gradle/

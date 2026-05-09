@@ -13,11 +13,13 @@ default_android_build_root="${STAI_TAVERN_ANDROID_BUILD_ROOT:-${STAI_ANDROID_BUI
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/.." && pwd)"
-android_root="$workspace_root/android-tavern"
+workspace_android_root="$workspace_root/android-tavern"
+android_root="$(realpath -m "$default_android_build_root/android-project/android-tavern")"
 sync_server_script="$workspace_root/scripts/sync-tavern-android-bootstrap.sh"
 dependency_pack_script="$workspace_root/scripts/build-tavern-dependency-packs.sh"
 runtime_image_script="$workspace_root/scripts/build-tavern-android-runtime-image.sh"
 build_config_path="$workspace_root/stai-build-config.json"
+rootfs_manifest_path="$workspace_android_root/app/src/main/assets/bootstrap/rootfs/rootfs-manifest.json"
 
 read_build_config_value() {
     local key_path="$1"
@@ -46,6 +48,8 @@ usage() {
 Usage: build-tavern-android-apk.sh [--runtime-image <path>] [--server-package <path> | --tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--build-type debug|release] [--dependency-packs <comma-separated>] [--prepare-prerequisites] [--refresh-runtime-image]
 
 说明：
+- runtime image / dependency packs 只负责 Termux rootfs、环境依赖、环境修复脚本；server core 只负责 Tavern 源码与 server overlay。
+- Android Host 扩展与默认扩展列表在 APK build 阶段分别写入独立 assets 目录，不再混入 server core。
 - 默认只消费现有 runtime image、server core 与 dependency packs，然后把它们合并进 android-tavern 工程。
 - 若不传 --runtime-image，默认读取 artifacts/android-runtime-images/tavern-android-runtime-<rid>.zip；缺失时会直接报错。
 - 若不传 --server-package，则默认读取 artifacts/validation/android-tavern-server-package/<rid>/server-core.zip，并从 artifacts/validation/android-tavern-dependency-packs/<rid> 组合出最终 server-payload.zip。
@@ -104,6 +108,101 @@ done
 configured_build_type="$(read_build_config_value 'build.buildType' 'release')"
 configured_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')"
 
+read_termux_packages_from_config() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf 'git\nnodejs-lts\nnpm\nnano\nbash\ndash\ncoreutils\nfindutils\ngrep\nsed\ngawk\ntar\ngzip\nxz-utils\nwhich\nca-certificates\n'
+        return
+    fi
+
+    python3 - "$build_config_path" <<'PY'
+import json
+import pathlib
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
+default = [
+    "git",
+    "nodejs-lts",
+    "npm",
+]
+
+if not config_path.exists():
+    print("\n".join(default))
+    raise SystemExit(0)
+
+try:
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    print("\n".join(default))
+    raise SystemExit(0)
+
+value = (((data or {}).get("build") or {}).get("termuxPackages"))
+if not isinstance(value, list) or not value:
+    print("\n".join(default))
+    raise SystemExit(0)
+
+items = []
+seen = set()
+for entry in value:
+    if not isinstance(entry, str):
+        continue
+    name = entry.strip()
+    if not name or name in seen:
+        continue
+    seen.add(name)
+    items.append(name)
+
+if not items:
+    items = default
+
+print("\n".join(items))
+PY
+}
+
+read_rootfs_base_flavor() {
+    if [[ ! -f "$rootfs_manifest_path" ]]; then
+        return
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        sed -n 's/^[[:space:]]*"baseFlavor":[[:space:]]*"\([^"]*\)".*$/\1/p' "$rootfs_manifest_path" | head -n 1
+        return
+    fi
+
+    python3 - "$rootfs_manifest_path" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+try:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+value = str(payload.get("baseFlavor") or "").strip()
+if value:
+    print(value)
+PY
+}
+
+rootfs_base_flavor="$(read_rootfs_base_flavor)"
+rootfs_provides_node_pack='0'
+rootfs_provides_git_pack='0'
+
+if [[ "$rootfs_base_flavor" == 'termux' ]]; then
+    while IFS= read -r termux_package_name; do
+        case "$termux_package_name" in
+            git)
+                rootfs_provides_git_pack='1'
+                ;;
+            nodejs|nodejs-lts|nodejs-current)
+                rootfs_provides_node_pack='1'
+                ;;
+        esac
+    done < <(read_termux_packages_from_config)
+fi
+
 read_dependency_packs_from_config() {
     if ! command -v python3 >/dev/null 2>&1; then
         printf 'node\ngit\n'
@@ -148,12 +247,27 @@ PY
 }
 
 resolve_dependency_pack_list() {
+    local raw_packs=''
+
     if [[ -n "$dependency_packs_override" ]]; then
-        printf '%s\n' "$dependency_packs_override" | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | awk 'NF > 0'
-        return
+        raw_packs="$(printf '%s\n' "$dependency_packs_override" | tr ',' '\n')"
+    else
+        raw_packs="$(read_dependency_packs_from_config)"
     fi
 
-    read_dependency_packs_from_config
+    printf '%s\n' "$raw_packs" \
+        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+        | awk 'NF > 0' \
+        | awk '!seen[$0]++' \
+        | while IFS= read -r pack_name; do
+            if [[ "$pack_name" == 'node' && "$rootfs_provides_node_pack" == '1' ]]; then
+                continue
+            fi
+            if [[ "$pack_name" == 'git' && "$rootfs_provides_git_pack" == '1' ]]; then
+                continue
+            fi
+            printf '%s\n' "$pack_name"
+        done
 }
 
 server_core_prepare_hint() {
@@ -173,10 +287,40 @@ runtime_image_prepare_hint() {
     printf 'bash ./scripts/build-tavern-android-runtime-image.sh --runtime-rid %s --output ./artifacts/android-runtime-images/tavern-android-runtime-%s.zip' "$runtime_rid" "$runtime_rid"
 }
 
+input_path_newer_than() {
+    local input_path="$1"
+    local reference_path="$2"
+
+    [[ -e "$input_path" ]] || return 1
+
+    if [[ -d "$input_path" ]]; then
+        find "$input_path" -type f -newer "$reference_path" -print -quit | grep -q .
+        return
+    fi
+
+    [[ "$input_path" -nt "$reference_path" ]]
+}
+
 prepare_server_core_artifact() {
     local generated_root="$1"
 
     bash "$sync_server_script" --runtime-rid "$runtime_rid" --tag "$tavern_tag" --target-root "$generated_root" --server-core-only
+}
+
+prepare_staged_android_project() {
+    local source_root="$1"
+    local staged_root="$2"
+
+    rm -rf "$staged_root"
+    mkdir -p "$(dirname "$staged_root")"
+    cp -R "$source_root" "$(dirname "$staged_root")/"
+
+    rm -rf \
+        "$staged_root/.gradle" \
+        "$staged_root/app/build" \
+        "$staged_root/app/src/main/assets/bootstrap/rootfs" \
+        "$staged_root/app/src/main/assets/bootstrap/server" \
+        "$staged_root/app/src/main/jniLibs/arm64-v8a"
 }
 
 prepare_dependency_packs_artifacts() {
@@ -194,11 +338,13 @@ generated_server_core_satisfy_request() {
     local generated_root="$1"
     local server_core_path="$generated_root/server-core.zip"
     local server_core_manifest_path="$generated_root/server-core-manifest.json"
+    local server_overlay_root="$workspace_root/android-tavern/server-overlay"
 
     [[ -f "$server_core_path" && -f "$server_core_manifest_path" ]] || return 1
     command -v python3 >/dev/null 2>&1 || return 1
 
-    if [[ "$sync_server_script" -nt "$server_core_manifest_path" || "$build_config_path" -nt "$server_core_manifest_path" ]]; then
+    if input_path_newer_than "$sync_server_script" "$server_core_manifest_path" \
+        || input_path_newer_than "$server_overlay_root" "$server_core_manifest_path"; then
         return 1
     fi
 
@@ -228,9 +374,16 @@ dependency_packs_satisfy_request() {
     local manifest_path=''
     local archive_file=''
     local pack_name=''
+    local -a requested_pack_names=()
+
+    command -v python3 >/dev/null 2>&1 || return 1
+
+    mapfile -t requested_pack_names < <(resolve_dependency_pack_list)
+    if [[ "${#requested_pack_names[@]}" -eq 0 ]]; then
+        return 0
+    fi
 
     [[ -d "$dependency_root" ]] || return 1
-    command -v python3 >/dev/null 2>&1 || return 1
 
     while IFS= read -r pack_name; do
         [[ -z "$pack_name" ]] && continue
@@ -253,7 +406,7 @@ print(archive_file)
 PY
 )" || return 1
         [[ -f "$dependency_root/$archive_file" ]] || return 1
-    done < <(resolve_dependency_pack_list)
+    done < <(printf '%s\n' "${requested_pack_names[@]}")
 
     return 0
 }
@@ -271,9 +424,9 @@ compose_server_package_from_components() {
     local composed_manifest_path="$generated_root/bootstrap-manifest.json"
     local output_archive_size_bytes='0'
     local archive_file
+    local -a dependency_pack_names=()
 
     stai_assert_path_exists "$server_core_path" "缺少 server core 产物：$server_core_path"
-    stai_assert_path_exists "$dependency_root" "缺少 dependency packs 目录：$dependency_root"
     stai_require_command unzip
     stai_ensure_java_home
 
@@ -281,8 +434,8 @@ compose_server_package_from_components() {
     mkdir -p "$compose_root"
 
     mapfile -t dependency_pack_names < <(resolve_dependency_pack_list)
-    if [[ "${#dependency_pack_names[@]}" -eq 0 ]]; then
-        stai_fail "依赖包列表为空，请通过 --dependency-packs 或 build.includeDependencyPacks 指定。"
+    if [[ "${#dependency_pack_names[@]}" -gt 0 ]]; then
+        stai_assert_path_exists "$dependency_root" "缺少 dependency packs 目录：$dependency_root"
     fi
 
     if ! command -v python3 >/dev/null 2>&1; then
@@ -290,7 +443,7 @@ compose_server_package_from_components() {
     fi
 
     stai_progress_stage 1 4 "开始校验 dependency manifests 并组合 server payload：${dependency_pack_names[*]}"
-    python3 - "$dependency_root" "$selected_list_path" "$env_file_path" "$post_extract_hook_path" "$selection_manifest_path" "${dependency_pack_names[@]}" <<'PY'
+    python3 - "$dependency_root" "$selected_list_path" "$env_file_path" "$post_extract_hook_path" "$selection_manifest_path" "$rootfs_provides_node_pack" "${dependency_pack_names[@]}" <<'PY'
 import json
 import pathlib
 import sys
@@ -300,7 +453,8 @@ selected_list_path = pathlib.Path(sys.argv[2])
 env_path = pathlib.Path(sys.argv[3])
 post_extract_hook_path = pathlib.Path(sys.argv[4])
 selection_manifest_path = pathlib.Path(sys.argv[5])
-requested = [item.strip() for item in sys.argv[6:] if item.strip()]
+rootfs_provides_node_pack = str(sys.argv[6]).strip() == "1"
+requested = [item.strip() for item in sys.argv[7:] if item.strip()]
 
 manifests = {}
 for manifest_file in sorted(dep_root.glob("*.manifest.json")):
@@ -384,7 +538,7 @@ for entry in selected:
         "manifestFile": entry.get("__manifestFile"),
     })
 
-if "node" not in {entry.get("name") for entry in selected}:
+if not rootfs_provides_node_pack and "node" not in {entry.get("name") for entry in selected}:
     raise SystemExit("当前 server 启动依赖 node 运行时，请在 includeDependencyPacks 中包含 node。")
 
 selected_list_path.write_text("\n".join(selected_archives) + "\n", encoding="utf-8")
@@ -565,17 +719,34 @@ apply_server_package() {
     local package_path="$1"
     local project_root="$2"
     local server_root="$project_root/app/src/main/assets/bootstrap/server"
-    local archive_path="$server_root/server-payload.zip"
     local manifest_path="$server_root/bootstrap-manifest.json"
     local source_manifest_path="$(dirname "$package_path")/bootstrap-manifest.json"
+    local archive_file_name='server-payload.zip'
+    local archive_path=''
     local archive_size_bytes='0'
     local synced_at_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
     stai_assert_path_exists "$package_path" "缺少 Tavern server 底包：$package_path"
 
+    if [[ -f "$source_manifest_path" ]] && command -v python3 >/dev/null 2>&1; then
+        archive_file_name="$(python3 - "$source_manifest_path" <<'PY'
+import json
+import sys
+
+payload = json.loads(open(sys.argv[1], 'r', encoding='utf-8').read())
+archive_file = str(payload.get('archiveFile') or '').strip()
+print(archive_file or 'server-payload.zip')
+PY
+)"
+    fi
+    archive_path="$server_root/$archive_file_name"
+
     stai_log "开始应用 Tavern server payload 到 Android 工程：$package_path"
-    rm -rf "$server_root"
     mkdir -p "$server_root"
+
+    # 服务器 assets 目录只能保留当前生效的一个 payload zip，旧归档残留会被一并打进 APK。
+    find "$server_root" -maxdepth 1 -type f -name '*.zip' ! -name "$archive_file_name" -delete
+
     cp -f "$package_path" "$archive_path"
     archive_size_bytes="$(stat -c '%s' "$archive_path")"
 
@@ -587,7 +758,7 @@ apply_server_package() {
   "runtimeRid": "$runtime_rid",
   "sourcePackage": "$(basename "$package_path")",
   "syncedAtUtc": "$synced_at_utc",
-  "archiveFile": "server-payload.zip",
+    "archiveFile": "$archive_file_name",
   "archiveSizeBytes": $archive_size_bytes
 }
 EOF
@@ -596,8 +767,36 @@ EOF
     stai_log "已应用 Tavern server 底包：$package_path"
 }
 
+apply_bundled_extensions() {
+    local project_root="$1"
+    local bundled_root="$project_root/app/src/main/assets/bootstrap/bundled-extensions"
+    local default_extensions_root="$project_root/app/src/main/assets/bootstrap/default-extensions"
+    local extensions_source_root="$workspace_root/android-tavern/extensions"
+
+    rm -rf "$bundled_root"
+    rm -rf "$default_extensions_root"
+
+    if [[ ! -d "$extensions_source_root" && ! -f "$build_config_path" ]]; then
+        return
+    fi
+
+    if [[ -d "$extensions_source_root" ]]; then
+        mkdir -p "$bundled_root"
+        cp -R "$extensions_source_root/." "$bundled_root/"
+    fi
+
+    if [[ -f "$build_config_path" ]]; then
+        mkdir -p "$default_extensions_root"
+        cp -f "$build_config_path" "$default_extensions_root/stai-build-config.json"
+    fi
+
+    stai_log "已应用 APK 内置扩展资产：$bundled_root"
+    stai_log "已应用默认扩展列表资产：$default_extensions_root"
+}
+
 android_sdk_root="$(stai_resolve_linux_android_sdk_root)"
 stai_ensure_linux_android_sdk "$android_sdk_root"
+prepare_staged_android_project "$workspace_android_root" "$android_root"
 stai_write_android_local_properties "$android_root" "$android_sdk_root"
 stai_ensure_java_home
 
@@ -623,14 +822,15 @@ else
     stai_log "复用 Tavern runtime image：$runtime_image_path"
 fi
 
-stai_progress_stage 5 6 "开始把 runtime image 和 server payload 写入 Android 工程"
+stai_progress_stage 5 6 "开始把 runtime image、server payload 和内置扩展写入 Android 工程"
 apply_runtime_image "$runtime_image_path" "$android_root"
 apply_server_package "$server_package_path" "$android_root"
+apply_bundled_extensions "$android_root"
 
 stai_progress_stage 6 6 "开始执行 Gradle 任务：$gradle_task"
 (
     cd "$android_root"
-    bash ../gradlew --no-daemon --console=plain -p "$android_root" "$gradle_task"
+    bash "$workspace_root/gradlew" --no-daemon --console=plain -p "$android_root" "$gradle_task"
 )
 stai_log "Gradle 任务完成：$gradle_task"
 

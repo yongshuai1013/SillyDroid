@@ -637,9 +637,20 @@ internal class AppUpdateCoordinator(
             return directVersion
         }
 
-        val ubuntuBaseVersion = manifest.optString("ubuntuBaseVersion").trim().ifBlank {
+        val baseFlavor = manifest.optString("baseFlavor").trim().ifBlank {
+            if (manifest.has("ubuntuBaseVersion") || manifest.has("ubuntuBaseUrl")) {
+                "ubuntu"
+            } else {
+                ""
+            }
+        }
+        val baseVersion = manifest.optString("baseVersion").trim().ifBlank {
+            manifest.optString("ubuntuBaseVersion").trim()
+        }.ifBlank {
             extractFirstGroup(
-                source = manifest.optString("ubuntuBaseUrl"),
+                source = manifest.optString("baseSourceUrl").ifBlank {
+                    manifest.optString("ubuntuBaseUrl")
+                },
                 pattern = """ubuntu-base-([0-9][0-9.]+)-base-arm64\.tar\.gz"""
             )
         }
@@ -650,9 +661,15 @@ internal class AppUpdateCoordinator(
             )
         }
 
+        val baseLabel = when {
+            baseVersion.isBlank() -> ""
+            baseFlavor.isBlank() || baseFlavor.equals("ubuntu", ignoreCase = true) -> baseVersion
+            else -> "$baseFlavor.$baseVersion"
+        }
+
         return when {
-            ubuntuBaseVersion.isNotBlank() && prootVersion.isNotBlank() -> "$ubuntuBaseVersion+proot.$prootVersion"
-            ubuntuBaseVersion.isNotBlank() -> ubuntuBaseVersion
+            baseLabel.isNotBlank() && prootVersion.isNotBlank() -> "$baseLabel+proot.$prootVersion"
+            baseLabel.isNotBlank() -> baseLabel
             prootVersion.isNotBlank() -> "proot.$prootVersion"
             else -> activity.getString(R.string.bootstrap_settings_about_version_unknown)
         }

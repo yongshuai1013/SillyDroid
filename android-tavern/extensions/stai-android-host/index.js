@@ -4,7 +4,7 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 
 const bridgeName = 'StaiAndroidHostBridge';
 const menuButtonId = 'stai_android_host_menu_button';
-const popupTitle = 'Android Host';
+const popupTitle = '安卓宿主';
 
 let slashCommandsRegistered = false;
 let bootstrapScheduled = false;
@@ -27,58 +27,70 @@ function getHostVersionInfo() {
     try {
         return JSON.parse(String(bridge.getHostVersionInfo() || '{}'));
     } catch (error) {
-        console.error('Android Host: failed to parse host version info', error);
+        console.error('安卓宿主：解析版本信息失败', error);
         return null;
     }
 }
 
 function showBridgeUnavailableToast() {
-    toastr.warning('Android host bridge is unavailable in this page.', popupTitle);
+    toastr.warning('当前页面无法连接安卓宿主桥。', popupTitle);
 }
 
 function formatVersionSummary(info) {
     if (!info) {
-        return 'Android host bridge unavailable';
+        return '安卓宿主桥不可用';
     }
 
     const hostVersion = String(info.hostVersion || 'unknown');
     const apkVersionName = String(info.apkVersionName || 'unknown');
     const apkVersionCode = String(info.apkVersionCode || 'unknown');
-    return `Host ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})`;
+    return `宿主 ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})`;
 }
 
 async function openSettingsCommand() {
     const bridge = getBridge();
     if (!bridge || typeof bridge.openSettings !== 'function') {
         showBridgeUnavailableToast();
-        return 'Android host bridge unavailable';
+        return '安卓宿主桥不可用';
     }
 
     const opened = bridge.openSettings() === true;
     if (opened) {
-        toastr.success('Opening Android host settings.', popupTitle);
-        return 'Opening Android host settings';
+        toastr.success('正在打开宿主设置。', popupTitle);
+        return '正在打开宿主设置';
     }
 
-    toastr.warning('Android host settings are already opening.', popupTitle);
-    return 'Android host settings are already opening';
+    toastr.warning('宿主设置已在打开中。', popupTitle);
+    return '宿主设置已在打开中';
+}
+
+async function setLogsBubbleEnabled(enabled) {
+    const bridge = getBridge();
+    if (!bridge || typeof bridge.setFloatingLogsBubbleEnabled !== 'function') {
+        showBridgeUnavailableToast();
+        return '安卓宿主桥不可用';
+    }
+
+    const updated = bridge.setFloatingLogsBubbleEnabled(enabled) === true;
+    if (!updated) {
+        const failedMessage = enabled ? '暂时无法启用日志悬浮球。' : '暂时无法关闭日志悬浮球。';
+        toastr.warning(failedMessage, popupTitle);
+        return failedMessage;
+    }
+
+    const info = getHostVersionInfo();
+    const message = enabled ? '已启用日志悬浮球。' : '已关闭日志悬浮球。';
+    if (enabled) {
+        toastr.success(message, popupTitle);
+    } else {
+        toastr.info(message, popupTitle);
+    }
+
+    return info ? formatVersionSummary(info) : message;
 }
 
 async function showLogsBubbleCommand() {
-    const bridge = getBridge();
-    if (!bridge || typeof bridge.showFloatingLogsBubble !== 'function') {
-        showBridgeUnavailableToast();
-        return 'Android host bridge unavailable';
-    }
-
-    const shown = bridge.showFloatingLogsBubble() === true;
-    if (shown) {
-        toastr.success('Android log bubble is now visible.', popupTitle);
-        return 'Android log bubble is now visible';
-    }
-
-    toastr.warning('Unable to show the Android log bubble right now.', popupTitle);
-    return 'Unable to show the Android log bubble right now';
+    return setLogsBubbleEnabled(true);
 }
 
 async function showVersionCommand() {
@@ -109,6 +121,60 @@ function buildInfoRow(label, value) {
     return row;
 }
 
+function buildSwitchRow(initialChecked) {
+    const row = document.createElement('label');
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.justifyContent = 'space-between';
+    row.style.gap = '12px';
+    row.style.padding = '10px 12px';
+    row.style.border = '1px solid rgba(15, 118, 110, 0.18)';
+    row.style.borderRadius = '12px';
+    row.style.background = 'rgba(15, 118, 110, 0.08)';
+
+    const textGroup = document.createElement('div');
+    textGroup.style.display = 'flex';
+    textGroup.style.flexDirection = 'column';
+    textGroup.style.gap = '4px';
+    textGroup.style.flex = '1';
+
+    const title = document.createElement('strong');
+    title.textContent = '日志悬浮球';
+    textGroup.appendChild(title);
+
+    const summary = document.createElement('span');
+    summary.textContent = '打开后会在主界面右下角显示日志球，点击即可展开实时日志。';
+    summary.style.fontSize = '0.92em';
+    summary.style.opacity = '0.82';
+    textGroup.appendChild(summary);
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = initialChecked;
+    input.style.width = '18px';
+    input.style.height = '18px';
+    input.style.flexShrink = '0';
+    input.style.cursor = 'pointer';
+    input.style.accentColor = '#0f766e';
+    input.addEventListener('change', async () => {
+        const requestedEnabled = input.checked;
+        input.disabled = true;
+        try {
+            await setLogsBubbleEnabled(requestedEnabled);
+        } catch (error) {
+            console.error('安卓宿主：切换日志悬浮球失败', error);
+            input.checked = !requestedEnabled;
+            toastr.error('切换日志悬浮球失败。', popupTitle);
+        } finally {
+            input.disabled = false;
+        }
+    });
+
+    row.appendChild(textGroup);
+    row.appendChild(input);
+    return row;
+}
+
 function buildPopupContent(info) {
     const wrapper = document.createElement('div');
     wrapper.style.display = 'flex';
@@ -118,31 +184,26 @@ function buildPopupContent(info) {
     const description = document.createElement('p');
     description.style.margin = '0';
     description.textContent = info
-        ? 'Use the Android host to open settings or reveal the floating logs bubble without restarting Tavern.'
-        : 'Android host bridge is unavailable on this page.';
+        ? '这里可以直接查看宿主版本、打开宿主设置，并即时切换日志悬浮球。'
+        : '当前页面无法连接安卓宿主桥。';
     wrapper.appendChild(description);
 
     if (!info) {
         return wrapper;
     }
 
-    wrapper.appendChild(buildInfoRow('Host Version', String(info.hostVersion || 'unknown')));
+    wrapper.appendChild(buildInfoRow('宿主版本', String(info.hostVersion || 'unknown')));
     wrapper.appendChild(
         buildInfoRow(
-            'APK Version',
+            'APK 版本',
             `${String(info.apkVersionName || 'unknown')} (${String(info.apkVersionCode || 'unknown')})`
         )
     );
+    wrapper.appendChild(buildSwitchRow(info.floatingLogBubbleEnabled === true));
     wrapper.appendChild(
         buildInfoRow(
-            'Floating Logs Bubble',
-            info.floatingLogBubbleEnabled ? 'Enabled' : 'Disabled'
-        )
-    );
-    wrapper.appendChild(
-        buildInfoRow(
-            'Local Service',
-            info.serverReady ? 'Running' : 'Starting or paused'
+            '本地服务',
+            info.serverReady ? '运行中' : '启动中或已暂停'
         )
     );
 
@@ -152,18 +213,13 @@ function buildPopupContent(info) {
 async function openAndroidHostPopup() {
     const info = getHostVersionInfo();
     const popup = new Popup(buildPopupContent(info), POPUP_TYPE.TEXT, '', {
-        okButton: 'Close',
+        okButton: '关闭',
         cancelButton: false,
         customButtons: info ? [
             {
-                text: 'Open Settings',
+                text: '打开宿主设置',
                 result: POPUP_RESULT.CUSTOM1,
                 icon: 'fa-sliders',
-            },
-            {
-                text: 'Show Logs Bubble',
-                result: POPUP_RESULT.CUSTOM2,
-                icon: 'fa-align-left',
             },
         ] : null,
     });
@@ -171,8 +227,6 @@ async function openAndroidHostPopup() {
     const result = await popup.show();
     if (result === POPUP_RESULT.CUSTOM1) {
         await openSettingsCommand();
-    } else if (result === POPUP_RESULT.CUSTOM2) {
-        await showLogsBubbleCommand();
     }
 }
 
@@ -219,10 +273,10 @@ function registerSlashCommands() {
             await openAndroidHostPopup();
             return formatVersionSummary(getHostVersionInfo());
         },
-        returns: 'Android host version summary',
+        returns: '安卓宿主版本摘要',
         helpString: `
             <div>
-                Opens the Android Host popup with host version details and quick actions.
+                打开安卓宿主弹窗，查看版本信息并执行快捷操作。
             </div>
         `,
     }));
@@ -230,10 +284,10 @@ function registerSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'android-host-settings',
         callback: openSettingsCommand,
-        returns: 'status message',
+        returns: '状态消息',
         helpString: `
             <div>
-                Opens the Android host settings screen without stopping Tavern first.
+                不停止 Tavern，直接打开安卓宿主设置页。
             </div>
         `,
     }));
@@ -241,10 +295,10 @@ function registerSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'android-host-logs',
         callback: showLogsBubbleCommand,
-        returns: 'status message',
+        returns: '状态消息',
         helpString: `
             <div>
-                Enables and reveals the Android floating logs bubble.
+                启用并显示安卓日志悬浮球。
             </div>
         `,
     }));
@@ -252,10 +306,10 @@ function registerSlashCommands() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'android-host-version',
         callback: showVersionCommand,
-        returns: 'Android host version summary',
+        returns: '安卓宿主版本摘要',
         helpString: `
             <div>
-                Shows the current Android host and APK versions.
+                显示当前安卓宿主和 APK 版本信息。
             </div>
         `,
     }));

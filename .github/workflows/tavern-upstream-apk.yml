@@ -64,6 +64,7 @@ jobs:
       publish_release: ${{ steps.plan.outputs.publish_release }}
       runtime_changed: ${{ steps.plan.outputs.runtime_changed }}
       payload_changed: ${{ steps.plan.outputs.payload_changed }}
+      server_changed: ${{ steps.plan.outputs.server_changed }}
       should_build: ${{ steps.plan.outputs.should_build }}
       release_tag: ${{ steps.plan.outputs.release_tag }}
       release_title: ${{ steps.plan.outputs.release_title }}
@@ -172,6 +173,7 @@ jobs:
 
           runtime_changed='false'
           payload_changed='false'
+          server_changed='false'
           if [ '${{ github.event_name }}' = 'push' ]; then
             compare_base='${{ github.event.before }}'
             compare_head='${{ github.sha }}'
@@ -189,6 +191,10 @@ jobs:
 
             if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|stai-build-config\.json)' > /dev/null 2>&1; then
               payload_changed='true'
+            fi
+
+            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|android-tavern/server-overlay/)' > /dev/null 2>&1; then
+              server_changed='true'
             fi
           fi
 
@@ -278,6 +284,7 @@ jobs:
             printf 'publish_release=%s\n' "$publish_release"
             printf 'runtime_changed=%s\n' "$runtime_changed"
             printf 'payload_changed=%s\n' "$payload_changed"
+            printf 'server_changed=%s\n' "$server_changed"
             printf 'should_build=%s\n' "$should_build"
             printf 'release_tag=%s\n' "$release_tag"
             printf 'release_title=%s\n' "$release_title"
@@ -780,7 +787,7 @@ jobs:
           path: |
             ${{ steps.server_paths.outputs.server_package_path }}
             ${{ steps.server_paths.outputs.server_manifest_path }}
-          key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'stai-build-config.json') }}
+          key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**') }}
 
       - name: Resolve Tavern server core prerequisite
         id: server_prereq
@@ -791,7 +798,7 @@ jobs:
           server_manifest_path='${{ steps.server_paths.outputs.server_manifest_path }}'
           server_source='cache'
 
-          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.payload_changed }}' = 'true' ]; then
+          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.server_changed }}' = 'true' ]; then
             server_source='built'
           elif [ -f "$server_package_path" ] && [ -f "$server_manifest_path" ]; then
             server_source='cache'
@@ -833,7 +840,6 @@ jobs:
         with:
           sparse-checkout: |
             stai-build-config.json
-            android-tavern/extensions
             android-tavern/server-overlay
             scripts
 
@@ -844,7 +850,7 @@ jobs:
           path: |
             ~/.cache/stai-android-toolchain
             ~/.npm
-          key: tavern-upstream-server-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'stai-build-config.json', 'android-tavern/extensions/**', 'android-tavern/server-overlay/**') }}
+          key: tavern-upstream-server-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**') }}
           restore-keys: |
             tavern-upstream-server-build-${{ runner.os }}-
 

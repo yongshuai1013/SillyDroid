@@ -6,7 +6,10 @@
     <color name="floating_logs_panel_secondary_text">#4B5563</color>
     <color name="floating_logs_panel_surface">#E5E7EB</color>
     <color name="floating_logs_panel_content">#111827</color>
+    <color name="floating_logs_bubble_background_start">#2DD4BF</color>
     <color name="floating_logs_bubble_background">#0F766E</color>
+    <color name="floating_logs_bubble_background_end">#115E59</color>
+    <color name="floating_logs_bubble_highlight">#73ECFEFF</color>
     <color name="floating_logs_bubble_stroke">#134E4A</color>
     <color name="floating_logs_bubble_text">#FFFFFF</color>
 </resources>

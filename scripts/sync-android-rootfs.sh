@@ -10,13 +10,94 @@ android_ndk_linux_url='https://dl.google.com/android/repository/android-ndk-r27-
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/.." && pwd)"
+build_config_path="$workspace_root/stai-build-config.json"
 proot_patch_signature="$(sha256sum "$script_dir/sync-android-rootfs.sh" | awk '{print $1}')"
 target_root="$workspace_root/android-tavern/app/src/main/assets/bootstrap/rootfs"
 jni_libs_root="$workspace_root/android-tavern/app/src/main/jniLibs/arm64-v8a"
 runtime_prefix='/data/data/com.stai.sillytavern/files/usr'
 runtime_loader_dir="$runtime_prefix/libexec/proot"
+termux_guest_runtime_prefix='/data/data/com.termux/files/usr'
+termux_prefix_shell_relative_path='bin/sh'
+termux_prefix_bash_relative_path='bin/bash'
+termux_prefix_dash_relative_path='bin/dash'
+termux_prefix_env_relative_path='bin/env'
+termux_prefix_ca_bundle_relative_path='etc/tls/cert.pem'
+guest_shell_path='/bin/sh'
+guest_ca_bundle_path='/etc/ssl/certs/ca-certificates.crt'
+
+termux_bootstrap_packages=(
+    bash
+    coreutils
+    findutils
+    grep
+    sed
+    gawk
+    tar
+    gzip
+    xz-utils
+    which
+    ca-certificates
+    termux-tools
+)
+
+termux_base_packages=(
+    git
+    nodejs-lts
+    npm
+)
 
 source "$workspace_root/scripts/android-build-common.sh"
+
+read_termux_packages_from_config() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf '%s\n' "${termux_base_packages[@]}"
+        return
+    fi
+
+    python3 - "$build_config_path" <<'PY'
+import json
+import pathlib
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
+default = [
+    "git",
+    "nodejs-lts",
+    "npm",
+]
+
+if not config_path.exists():
+    print("\n".join(default))
+    raise SystemExit(0)
+
+try:
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    print("\n".join(default))
+    raise SystemExit(0)
+
+value = (((data or {}).get("build") or {}).get("termuxPackages"))
+if not isinstance(value, list) or not value:
+    print("\n".join(default))
+    raise SystemExit(0)
+
+items = []
+seen = set()
+for entry in value:
+    if not isinstance(entry, str):
+        continue
+    name = entry.strip()
+    if not name or name in seen:
+        continue
+    seen.add(name)
+    items.append(name)
+
+if not items:
+    items = default
+
+print("\n".join(items))
+PY
+}
 
 offline_runtime_packages=(
     ca-certificates
@@ -84,6 +165,21 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+mapfile -t configured_termux_base_packages < <(read_termux_packages_from_config)
+merged_termux_packages=()
+declare -A seen_termux_packages=()
+
+for package_name in "${termux_bootstrap_packages[@]}" "${configured_termux_base_packages[@]}"; do
+    [[ -n "$package_name" ]] || continue
+    if [[ -n "${seen_termux_packages[$package_name]:-}" ]]; then
+        continue
+    fi
+    seen_termux_packages["$package_name"]=1
+    merged_termux_packages+=("$package_name")
+done
+
+termux_base_packages=("${merged_termux_packages[@]}")
 
 assert_path_exists() {
     local path="$1"
@@ -243,6 +339,136 @@ copy_resolved_directory_contents() {
         copy_resolved_item "$child" "$destination_root/$(basename "$child")" "$source_root"
     done
     shopt -u dotglob nullglob
+}
+
+resolve_termux_package_prefix_root() {
+    local package_data_root="$1"
+    local prefix_root=''
+
+    prefix_root="$(find "$package_data_root" -type d -path '*/data/data/com.termux/files/usr' | LC_ALL=C sort | head -n 1)"
+    if [[ -z "$prefix_root" ]]; then
+        prefix_root="$(find "$package_data_root" -type d -path '*/usr' | awk '{ print length($0) " " $0 }' | LC_ALL=C sort -n | head -n 1 | cut -d' ' -f2-)"
+    fi
+
+    assert_path_exists "$prefix_root" "Resolved Termux package is missing a prefix root under $package_data_root"
+    realpath "$prefix_root"
+}
+
+copy_termux_package_prefix_contents() {
+    local package_data_root="$1"
+    local destination_root="$2"
+    local prefix_root=''
+
+    prefix_root="$(resolve_termux_package_prefix_root "$package_data_root")"
+    mkdir -p "$destination_root"
+    cp -a "$prefix_root/." "$destination_root/"
+}
+
+prepare_archive_stage_with_symlink_manifest() {
+    local source_root="$1"
+    local archive_stage_root="$2"
+    local symlink_manifest_path="$archive_stage_root/SYMLINKS.txt"
+    local directory_path=''
+    local file_path=''
+    local link_path=''
+    local relative_path=''
+    local link_target=''
+    local symlink_count='0'
+
+    rm -rf "$archive_stage_root"
+    mkdir -p "$archive_stage_root"
+
+    while IFS= read -r directory_path; do
+        relative_path="${directory_path#"$source_root"/}"
+        mkdir -p "$archive_stage_root/$relative_path"
+    done < <(find "$source_root" -mindepth 1 -type d | LC_ALL=C sort)
+
+    while IFS= read -r file_path; do
+        relative_path="${file_path#"$source_root"/}"
+        mkdir -p "$(dirname "$archive_stage_root/$relative_path")"
+        cp -a "$file_path" "$archive_stage_root/$relative_path"
+    done < <(find "$source_root" -mindepth 1 -type f | LC_ALL=C sort)
+
+    : > "$symlink_manifest_path"
+    while IFS= read -r link_path; do
+        relative_path="${link_path#"$source_root"/}"
+        link_target="$(readlink "$link_path")"
+        printf '%s←%s\n' "$link_target" "$relative_path" >> "$symlink_manifest_path"
+        symlink_count=$((symlink_count + 1))
+    done < <(find "$source_root" -mindepth 1 -type l | LC_ALL=C sort)
+
+    if [[ "$symlink_count" -eq 0 ]]; then
+        rm -f "$symlink_manifest_path"
+    fi
+}
+
+install_termux_guest_rootfs_shims() {
+    local prefix_root="$1"
+    local guest_root="$2"
+
+    mkdir -p "$guest_root/bin" "$guest_root/usr/bin" "$guest_root/etc/ssl/certs" "$guest_root/etc/tls" "$guest_root/tmp"
+    chmod 1777 "$guest_root/tmp"
+
+    assert_path_exists "$prefix_root/$termux_prefix_shell_relative_path" "Resolved Termux host prefix is incomplete: missing shell at $prefix_root/$termux_prefix_shell_relative_path"
+    cp -L "$prefix_root/$termux_prefix_shell_relative_path" "$guest_root/bin/sh"
+    chmod 0755 "$guest_root/bin/sh"
+
+    if [[ -f "$prefix_root/$termux_prefix_dash_relative_path" ]]; then
+        cp -L "$prefix_root/$termux_prefix_dash_relative_path" "$guest_root/bin/dash"
+        cp -L "$prefix_root/$termux_prefix_dash_relative_path" "$guest_root/usr/bin/dash"
+        chmod 0755 "$guest_root/bin/dash" "$guest_root/usr/bin/dash"
+    fi
+
+    if [[ -f "$prefix_root/$termux_prefix_bash_relative_path" ]]; then
+        cp -L "$prefix_root/$termux_prefix_bash_relative_path" "$guest_root/bin/bash"
+        cp -L "$prefix_root/$termux_prefix_bash_relative_path" "$guest_root/usr/bin/bash"
+        chmod 0755 "$guest_root/bin/bash" "$guest_root/usr/bin/bash"
+    fi
+
+    if [[ -f "$prefix_root/$termux_prefix_env_relative_path" ]]; then
+        cp -L "$prefix_root/$termux_prefix_env_relative_path" "$guest_root/bin/env"
+        cp -L "$prefix_root/$termux_prefix_env_relative_path" "$guest_root/usr/bin/env"
+        chmod 0755 "$guest_root/bin/env" "$guest_root/usr/bin/env"
+    fi
+
+    assert_path_exists "$prefix_root/$termux_prefix_ca_bundle_relative_path" "Resolved Termux host prefix is incomplete: missing CA bundle at $prefix_root/$termux_prefix_ca_bundle_relative_path"
+    cp -L "$prefix_root/$termux_prefix_ca_bundle_relative_path" "$guest_root/etc/ssl/certs/ca-certificates.crt"
+    cp -L "$prefix_root/$termux_prefix_ca_bundle_relative_path" "$guest_root/etc/tls/cert.pem"
+}
+
+install_termux_host_prefix_wrappers() {
+    local prefix_root="$1"
+    local npm_cli_relative_path='lib/node_modules/npm/bin/npm-cli.js'
+    local npx_cli_relative_path='lib/node_modules/npm/bin/npx-cli.js'
+
+    mkdir -p "$prefix_root/bin"
+
+    if [[ -f "$prefix_root/$npm_cli_relative_path" ]]; then
+        cat > "$prefix_root/bin/npm" <<EOF
+#!/bin/sh
+set -eu
+prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
+exec "\$prefix_root/bin/node" "\$prefix_root/$npm_cli_relative_path" "\$@"
+EOF
+        chmod 0755 "$prefix_root/bin/npm"
+    fi
+
+    if [[ -f "$prefix_root/$npx_cli_relative_path" ]]; then
+        cat > "$prefix_root/bin/npx" <<EOF
+#!/bin/sh
+set -eu
+prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
+exec "\$prefix_root/bin/node" "\$prefix_root/$npx_cli_relative_path" "\$@"
+EOF
+        chmod 0755 "$prefix_root/bin/npx"
+    fi
+}
+
+extract_termux_package_version() {
+    local package_name="$1"
+    local package_filename="$2"
+
+    printf '%s' "$package_filename" | sed -n "s#.*${package_name}_\([^_]*\)_[^/]*\.deb#\1#p"
 }
 
 generate_rootfs_ca_store() {
@@ -646,6 +872,7 @@ assets_stage_root="$working_root/assets-stage"
 resolved_target_root="$(realpath -m "$target_root")"
 resolved_jni_libs_root="$(realpath -m "$jni_libs_root")"
 host_prefix_stage_root="$assets_stage_root/usr"
+host_prefix_archive_stage_root="$assets_stage_root/usr-archive"
 rootfs_fs_stage_root="$assets_stage_root/fs"
 rootfs_fs_archive_path="$resolved_target_root/rootfs-fs.zip"
 host_prefix_archive_path="$resolved_target_root/rootfs-usr.zip"
@@ -657,9 +884,11 @@ ubuntu_archive_path="$downloads_root/$(basename "$ubuntu_base_url")"
 
 existing_manifest_path="$resolved_target_root/rootfs-manifest.json"
 if [[ -f "$existing_manifest_path" ]] \
-    && grep -Fq "$ubuntu_base_url" "$existing_manifest_path" \
+    && grep -Fq '"baseFlavor": "termux"' "$existing_manifest_path" \
+    && grep -Fq "$termux_packages_index_url" "$existing_manifest_path" \
     && grep -Fq "$proot_source_url" "$existing_manifest_path" \
     && grep -Fq "$proot_patch_signature" "$existing_manifest_path" \
+    && grep -Fq "$termux_guest_runtime_prefix" "$existing_manifest_path" \
     && grep -Fq '"hostRuntimeEntry": "nativeLibraryDir"' "$existing_manifest_path" \
     && [[ -f "$rootfs_fs_archive_path" ]] \
     && [[ -f "$host_prefix_archive_path" ]] \
@@ -675,7 +904,6 @@ stai_download_queue_reset
 stai_queue_download_if_missing "$proot_package_url" "$proot_package_path" 'proot-termux'
 stai_queue_download_if_missing "$proot_source_url" "$proot_source_archive_path" 'proot-source'
 stai_queue_download_if_missing "$termux_packages_index_url" "$termux_packages_index_path" 'termux-packages-index'
-stai_queue_download_if_missing "$ubuntu_base_url" "$ubuntu_archive_path" 'ubuntu-base-rootfs'
 stai_run_download_queue
 
 stai_ensure_java_home
@@ -703,17 +931,29 @@ fi
 load_termux_package_table "$termux_packages_index_path" 'https://packages.termux.dev/apt/termux-main'
 mapfile -t proot_dependency_names < <(normalize_dependency_names "$proot_depends_value")
 mapfile -t resolved_termux_dependency_names < <(resolve_termux_package_dependencies "${proot_dependency_names[@]}")
+mapfile -t resolved_termux_base_package_names < <(resolve_termux_package_dependencies "${termux_base_packages[@]}")
+
+declare -A required_termux_packages=()
+resolved_termux_package_names=()
+for package_name in "${resolved_termux_dependency_names[@]}" "${resolved_termux_base_package_names[@]}"; do
+    [[ -n "$package_name" ]] || continue
+    if [[ -n "${required_termux_packages[$package_name]:-}" ]]; then
+        continue
+    fi
+    required_termux_packages["$package_name"]=1
+    resolved_termux_package_names+=("$package_name")
+done
 
 stai_download_queue_reset
-for dependency_name in "${resolved_termux_dependency_names[@]}"; do
+for dependency_name in "${resolved_termux_package_names[@]}"; do
     dependency_url="${termux_repo_by_package[$dependency_name]}/${termux_filename_by_package[$dependency_name]}"
     dependency_package_path="$downloads_root/$(basename "${termux_filename_by_package[$dependency_name]}")"
     stai_queue_download_if_missing "$dependency_url" "$dependency_package_path" "termux:$dependency_name"
 done
 stai_run_download_queue
 
-stai_log "开始展开 ${#resolved_termux_dependency_names[@]} 个 Termux 依赖包"
-for dependency_name in "${resolved_termux_dependency_names[@]}"; do
+stai_log "开始展开 ${#resolved_termux_package_names[@]} 个 Termux 包"
+for dependency_name in "${resolved_termux_package_names[@]}"; do
     dependency_url="${termux_repo_by_package[$dependency_name]}/${termux_filename_by_package[$dependency_name]}"
     dependency_package_path="$downloads_root/$(basename "${termux_filename_by_package[$dependency_name]}")"
     dependency_deb_root="$termux_extract_root/$dependency_name-deb"
@@ -725,11 +965,10 @@ for dependency_name in "${resolved_termux_dependency_names[@]}"; do
     rm -rf "$dependency_data_root"
     mkdir -p "$dependency_data_root"
     expand_tar_archive "$dependency_data_archive_path" "$dependency_data_root" "termux:$dependency_name-data"
-
-    while IFS= read -r lib_dir; do
-        copy_resolved_directory_contents "$lib_dir" "$host_prefix_stage_root/lib"
-    done < <(find "$dependency_data_root" -type d -path '*/usr/lib' | LC_ALL=C sort)
+    copy_termux_package_prefix_contents "$dependency_data_root" "$host_prefix_stage_root"
 done
+
+install_termux_host_prefix_wrappers "$host_prefix_stage_root"
 
 rm -rf "$proot_build_root/source"
 mkdir -p "$proot_build_root/source"
@@ -754,65 +993,11 @@ stai_log "开始编译 proot 原生库"
 build_termux_proot "$proot_source_root" "$ndk_prebuilt_root" "$libtalloc_include_root" "$libtalloc_lib_root" "$host_prefix_stage_root" "$proot_build_root/toolwrap"
 sync_host_runtime_jni_libs "$host_prefix_stage_root" "$resolved_jni_libs_root"
 
-if ! test_tar_contains_path "$ubuntu_archive_path" 'usr/bin/sh'; then
-    echo "Ubuntu base rootfs archive is incomplete: missing usr/bin/sh in $ubuntu_archive_path" >&2
-    exit 1
-fi
-
-stai_log "开始解压 Ubuntu base rootfs"
-expand_tar_archive "$ubuntu_archive_path" "$rootfs_extract_root" 'ubuntu-base-rootfs'
-copy_resolved_directory_contents "$rootfs_extract_root" "$rootfs_fs_stage_root"
-
-stai_download_queue_reset
-for ((index = 0; index < ${#apt_repo_names[@]}; index++)); do
-    repo_name="${apt_repo_names[$index]}"
-    repo_url="${apt_repo_urls[$index]}"
-    repo_archive_path="$apt_indexes_root/$repo_name.Packages.gz"
-    stai_queue_download_if_missing "$repo_url" "$repo_archive_path" "apt-index:$repo_name"
-done
-stai_run_download_queue
-
-stai_log "开始解析 APT 索引"
-for ((index = 0; index < ${#apt_repo_names[@]}; index++)); do
-    repo_name="${apt_repo_names[$index]}"
-    repo_url="${apt_repo_urls[$index]}"
-    repo_base="${apt_repo_bases[$index]}"
-    repo_archive_path="$apt_indexes_root/$repo_name.Packages.gz"
-    repo_index_path="$apt_indexes_root/$repo_name.Packages"
-
-    expand_gzip_file "$repo_archive_path" "$repo_index_path"
-    add_apt_package_entries_from_index "$repo_index_path" "$repo_base"
-done
-
-mapfile -t resolved_offline_runtime_packages < <(resolve_apt_package_dependencies "${offline_runtime_packages[@]}")
-stai_download_queue_reset
-for package_name in "${resolved_offline_runtime_packages[@]}"; do
-    package_path="$apt_packages_root/$(basename "${apt_filename_by_package[$package_name]}")"
-    package_url="${apt_repo_by_package[$package_name]}/${apt_filename_by_package[$package_name]}"
-    stai_queue_download_if_missing "$package_url" "$package_path" "apt:$package_name"
-done
-stai_run_download_queue
-
-stai_log "开始展开 ${#resolved_offline_runtime_packages[@]} 个离线运行库包"
-for package_name in "${resolved_offline_runtime_packages[@]}"; do
-    package_path="$apt_packages_root/$(basename "${apt_filename_by_package[$package_name]}")"
-    package_url="${apt_repo_by_package[$package_name]}/${apt_filename_by_package[$package_name]}"
-    package_deb_root="$working_root/apt-deb-$package_name"
-    package_data_root="$working_root/apt-data-$package_name"
-
-    expand_deb_archive "$package_path" "$package_deb_root" "apt:$package_name-deb"
-    package_data_archive_path="$(find "$package_deb_root" -maxdepth 1 -type f -name 'data.tar*' | head -n 1)"
-    assert_path_exists "$package_data_archive_path" "data.tar archive was not found in $package_path"
-
-    rm -rf "$package_data_root"
-    mkdir -p "$package_data_root"
-    expand_tar_archive "$package_data_archive_path" "$package_data_root" "apt:$package_name-data"
-    copy_resolved_directory_contents "$package_data_root" "$rootfs_fs_stage_root"
-done
-
-generate_rootfs_ca_store "$rootfs_fs_stage_root"
+stai_log '开始组装 Termux guest rootfs skeleton'
+install_termux_guest_rootfs_shims "$host_prefix_stage_root" "$rootfs_fs_stage_root"
 
 assert_path_exists "$rootfs_fs_stage_root/bin/sh" "Resolved Android rootfs is incomplete: missing bin/sh at $rootfs_fs_stage_root/bin/sh"
+assert_path_exists "$rootfs_fs_stage_root/etc/ssl/certs/ca-certificates.crt" "Resolved Android rootfs is incomplete: missing CA bundle at $rootfs_fs_stage_root/etc/ssl/certs/ca-certificates.crt"
 
 rm -rf "$resolved_target_root"
 mkdir -p "$resolved_target_root"
@@ -820,14 +1005,20 @@ mkdir -p "$resolved_target_root"
 # 把 rootfs fs/usr 资产收敛成两个 ZIP，直接减少 Gradle merge/compress assets 的文件数。
 rm -f "$rootfs_fs_archive_path" "$host_prefix_archive_path"
 stai_log "开始归档 rootfs fs/usr 资产"
+prepare_archive_stage_with_symlink_manifest "$host_prefix_stage_root" "$host_prefix_archive_stage_root"
 "$jar_path" --create --file "$rootfs_fs_archive_path" --no-manifest -C "$rootfs_fs_stage_root" .
-"$jar_path" --create --file "$host_prefix_archive_path" --no-manifest -C "$host_prefix_stage_root" .
+"$jar_path" --create --file "$host_prefix_archive_path" --no-manifest -C "$host_prefix_archive_stage_root" .
 
 rootfs_fs_file_count="$(find "$rootfs_fs_stage_root" -type f | wc -l | tr -d '[:space:]')"
 host_prefix_file_count="$(find "$host_prefix_stage_root" -type f | wc -l | tr -d '[:space:]')"
 rootfs_fs_archive_size_bytes="$(stat -c '%s' "$rootfs_fs_archive_path")"
 host_prefix_archive_size_bytes="$(stat -c '%s' "$host_prefix_archive_path")"
-ubuntu_base_version="$(printf '%s' "$ubuntu_base_url" | sed -n 's#.*ubuntu-base-\([0-9][0-9.]*\)-base-arm64\.tar\.gz#\1#p')"
+termux_base_version="$(extract_termux_package_version dash "${termux_filename_by_package[dash]:-}")"
+if [[ -n "$termux_base_version" ]]; then
+    termux_base_version="stable-dash.$termux_base_version"
+else
+    termux_base_version='stable'
+fi
 proot_package_version="$(printf '%s' "$proot_package_url" | sed -n 's#.*/proot_\([^_]*\)_aarch64\.deb#\1#p')"
 runtime_version="$STAI_ROOTFS_VERSION"
 
@@ -837,23 +1028,47 @@ manifest_path="$resolved_target_root/rootfs-manifest.json"
     printf '{\n'
     printf '  "staiRootfsVersion": "%s",\n' "$(json_escape "$STAI_ROOTFS_VERSION")"
     printf '  "runtimeVersion": "%s",\n' "$(json_escape "$runtime_version")"
-    printf '  "ubuntuBaseVersion": "%s",\n' "$(json_escape "$ubuntu_base_version")"
+    printf '  "baseFlavor": "termux",\n'
+    printf '  "baseVersion": "%s",\n' "$(json_escape "$termux_base_version")"
+    printf '  "baseSourceUrl": "%s",\n' "$(json_escape "$termux_packages_index_url")"
+    printf '  "ubuntuBaseVersion": "",\n'
     printf '  "prootVersion": "%s",\n' "$(json_escape "$proot_package_version")"
-    printf '  "ubuntuBaseUrl": "%s",\n' "$(json_escape "$ubuntu_base_url")"
-    printf '  "ubuntuPortsBaseUrl": "%s",\n' "$(json_escape "$ubuntu_ports_base_url")"
+    printf '  "ubuntuBaseUrl": "",\n'
+    printf '  "ubuntuPortsBaseUrl": "",\n'
     printf '  "prootPackageUrl": "%s",\n' "$(json_escape "$proot_package_url")"
     printf '  "prootSourceUrl": "%s",\n' "$(json_escape "$proot_source_url")"
     printf '  "prootPatchSignature": "%s",\n' "$(json_escape "$proot_patch_signature")"
     printf '  "runtimePrefix": "%s",\n' "$(json_escape "$runtime_prefix")"
+    printf '  "guestRuntimePrefix": "%s",\n' "$(json_escape "$termux_guest_runtime_prefix")"
+    printf '  "guestShellPath": "%s",\n' "$(json_escape "$guest_shell_path")"
+    printf '  "guestCaBundlePath": "%s",\n' "$(json_escape "$guest_ca_bundle_path")"
     printf '  "hostRuntimeEntry": "nativeLibraryDir",\n'
     printf '  "syncedAtUtc": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     printf '  "offlineRuntimePackages": [\n'
-    for ((index = 0; index < ${#resolved_offline_runtime_packages[@]}; index++)); do
+    for ((index = 0; index < 0; index++)); do
         separator=','
-        if (( index == ${#resolved_offline_runtime_packages[@]} - 1 )); then
+        if (( index == -1 )); then
             separator=''
         fi
-        printf '    "%s"%s\n' "$(json_escape "${resolved_offline_runtime_packages[$index]}")" "$separator"
+        printf '    "%s"%s\n' '' "$separator"
+    done
+    printf '  ],\n'
+    printf '  "termuxBasePackages": [\n'
+    for ((index = 0; index < ${#termux_base_packages[@]}; index++)); do
+        separator=','
+        if (( index == ${#termux_base_packages[@]} - 1 )); then
+            separator=''
+        fi
+        printf '    "%s"%s\n' "$(json_escape "${termux_base_packages[$index]}")" "$separator"
+    done
+    printf '  ],\n'
+    printf '  "termuxResolvedPackages": [\n'
+    for ((index = 0; index < ${#resolved_termux_package_names[@]}; index++)); do
+        separator=','
+        if (( index == ${#resolved_termux_package_names[@]} - 1 )); then
+            separator=''
+        fi
+        printf '    "%s"%s\n' "$(json_escape "${resolved_termux_package_names[$index]}")" "$separator"
     done
     printf '  ],\n'
     printf '  "archiveFiles": [\n'

@@ -9,6 +9,12 @@
 
 上游 SillyTavern 源码不会长期作为主工程保存在仓库里；构建时会同步指定 tag，生成宿主使用的 server payload。
 
+## 第三方许可证说明
+
+- Android 运行时层基于 Termux 生态的 prefix、bootstrap 约定和相关运行时资源构建。
+- 分发 APK、runtime image 或解包后的 payload 时，应同时保留上游组件的版权声明与许可证文本。
+- 当前仓库整理的第三方许可证说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 宿主当前能力
 
 - 本地启动、停止并健康检查 SillyTavern 服务。

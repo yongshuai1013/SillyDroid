@@ -221,17 +221,22 @@
 
     <TextView
         android:id="@+id/floatingLogsBubble"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
         android:layout_gravity="bottom|end"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginEnd="18dp"
+        android:layout_marginBottom="18dp"
         android:background="@drawable/bg_floating_logs_bubble"
         android:contentDescription="@string/floating_logs_bubble_description"
+        android:elevation="10dp"
+        android:fontFamily="sans-serif-medium"
         android:gravity="center"
+        android:includeFontPadding="false"
+        android:letterSpacing="0.04"
+        android:paddingBottom="1dp"
         android:text="@string/floating_logs_bubble_label"
         android:textColor="@color/floating_logs_bubble_text"
-        android:textSize="12sp"
+        android:textSize="11sp"
         android:textStyle="bold"
         android:visibility="gone" />
 

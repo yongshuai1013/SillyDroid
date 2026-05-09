@@ -9,7 +9,6 @@ workspace_root="$(cd "$script_dir/.." && pwd)"
 target_root="$workspace_root/artifacts/validation/android-tavern-server-package/$runtime_rid"
 working_root="${STAI_TAVERN_ANDROID_BOOTSTRAP_WORK_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/stai-tavern-android-bootstrap}"
 server_overlay_root="$workspace_root/android-tavern/server-overlay"
-extensions_source_root="$workspace_root/android-tavern/extensions"
 build_config_path="$workspace_root/stai-build-config.json"
 
 read_build_config_value() {
@@ -113,7 +112,7 @@ Usage: sync-tavern-android-bootstrap.sh [--tag <sillytavern-tag>] [--runtime-rid
 说明：
 - 未传 --tag 时优先读取仓库根目录 stai-build-config.json 的 build.tavernVersion。
 - build.tavernVersion 为 latest 或 auto 时，会自动解析上游最新 GitHub Release tag。
-- 传 --server-core-only 时只生成 server-core.zip 与 server-core-manifest.json，供后续阶段复用 dependency packs 再组合。
+- 传 --server-core-only 时只生成 Tavern server core；其中只包含 Tavern 源码与 server overlay，不包含 APK 侧 bundled extensions。
 EOF
 }
 
@@ -253,16 +252,6 @@ fi
 
 patch_android_default_config "$payload_root/default/config.yaml"
 
-if [[ -d "$extensions_source_root" ]]; then
-    mkdir -p "$payload_root/bundled-extensions"
-    cp -R "$extensions_source_root/." "$payload_root/bundled-extensions/"
-fi
-
-if [[ -f "$build_config_path" ]]; then
-    mkdir -p "$payload_root/bundled-extensions"
-    cp -f "$build_config_path" "$payload_root/bundled-extensions/stai-build-config.json"
-fi
-
 if [[ "$server_core_only" != '1' ]]; then
     stai_progress_stage 3 5 "开始构建 dependency packs"
     bash "$dependency_pack_script" \
@@ -336,6 +325,9 @@ if [ -f ./dependency-env.sh ]; then
     # shellcheck disable=SC1091
     . ./dependency-env.sh
 fi
+
+# Android 包内已经预装运行依赖；不要回退到上游 start.sh，避免冷启动重新执行 npm install。
+export NODE_ENV=production
 
 NODE_BIN="${TAVERN_NODE_BIN:-./node/bin/node}"
 if [ ! -x "$NODE_BIN" ]; then

@@ -2,6 +2,11 @@
   "build": {
     "tavernVersion": "latest",
     "buildType": "release",
+    "termuxPackages": [
+      "git",
+      "nodejs-lts",
+      "npm"
+    ],
     "includeDependencyPacks": [
       "node",
       "git"

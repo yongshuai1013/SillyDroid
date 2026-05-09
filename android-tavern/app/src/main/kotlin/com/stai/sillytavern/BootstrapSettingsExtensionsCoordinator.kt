@@ -22,6 +22,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import com.google.android.material.R as MaterialR
@@ -135,6 +137,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
     private var bundledExtensions: List<BundledExtension> = emptyList()
     private var busy = false
     private var progressState: ExtensionProgressState? = null
+    private var defaultRepositoriesPrompted = false
 
     fun initialize() {
         installButton.setOnClickListener {
@@ -148,7 +151,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         reloadExtensions()
     }
 
-    fun reloadExtensions() {
+    fun reloadExtensions(promptDefaultInstall: Boolean = false) {
         if (busy) {
             return
         }
@@ -166,10 +169,55 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 extensions = inventory.installedExtensions
                 bundledExtensions = inventory.bundledExtensions
                 renderExtensions()
+                if (promptDefaultInstall) {
+                    maybePromptInstallDefaultRepositories(inventory)
+                }
             }.onFailure { exception ->
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
             }
         }
+    }
+
+    private fun maybePromptInstallDefaultRepositories(inventory: ExtensionInventory) {
+        if (defaultRepositoriesPrompted) {
+            return
+        }
+
+        val repositories = loadDefaultExtensionRepositories()
+        if (repositories.isEmpty() || !hasMissingDefaultRepositories(repositories, inventory.installedExtensions)) {
+            return
+        }
+
+        defaultRepositoriesPrompted = true
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_default_prompt_title)
+            .setMessage(activity.getString(R.string.bootstrap_settings_extensions_default_prompt_message, repositories.size))
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_install) { _, _ ->
+                promptInstallDefaultRepositories(repositories)
+            }
+            .show()
+    }
+
+    private fun hasMissingDefaultRepositories(
+        repositories: List<DefaultExtensionRepository>,
+        installedExtensions: List<ManagedExtension>
+    ): Boolean {
+        val installedRepositoryKeys = installedExtensions
+            .mapNotNull { extension -> extension.homePage?.takeIf { it.isNotBlank() } }
+            .mapNotNull(::normalizeRepositoryUrl)
+            .map(::normalizedRepositoryKey)
+            .toSet()
+
+        return repositories.any { repository ->
+            val normalizedRepository = normalizeRepositoryUrl(repository.repositoryUrl) ?: return@any true
+            normalizedRepositoryKey(normalizedRepository) !in installedRepositoryKeys
+        }
+    }
+
+    private fun normalizedRepositoryKey(repository: NormalizedExtensionRepository): String {
+        val branchKey = repository.branch?.trim().orEmpty()
+        return "${repository.cloneUrl.trim().lowercase()}#$branchKey"
     }
 
     private fun loadExtensionInventory(): ExtensionInventory {
@@ -584,6 +632,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    ensureRemoteSourcesReachable(listOf(normalizedRepository))
                     runExtensionReinstall(
                         extension.folderName,
                         normalizedRepository,
@@ -979,6 +1028,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    ensureRemoteSourcesReachable(repositoryUrls.mapNotNull(::normalizeRepositoryUrl))
                     val previews = mutableListOf<ExtensionInstallPreview>()
                     val failures = mutableListOf<BatchExtensionFailure>()
                     repositoryUrls.forEach { repositoryUrl ->
@@ -1037,6 +1087,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    ensureRemoteSourcesReachable(listOf(normalizedRepository))
                     runExtensionInstallPreview(
                         repositoryUrl,
                         normalizedRepository,
@@ -1503,7 +1554,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
     }
 
     private fun loadBundledExtensions(): List<BundledExtension> {
-        val bundledRoot = File(paths.bootstrapRoot, "server/bundled-extensions")
+        val bundledRoot = File(paths.bootstrapRoot, "bundled-extensions")
         if (!bundledRoot.isDirectory) {
             return emptyList()
         }
@@ -1536,11 +1587,19 @@ internal class BootstrapSettingsExtensionsCoordinator(
     }
 
     private fun loadDefaultExtensionRepositories(): List<DefaultExtensionRepository> {
-        val packagedConfigFile = File(paths.bootstrapRoot, "server/bundled-extensions/stai-build-config.json")
-        val legacyRepositoriesFile = File(paths.bootstrapRoot, "server/bundled-extensions/default-extension-repositories.json")
+        val packagedConfigFile = File(paths.bootstrapRoot, "default-extensions/stai-build-config.json")
+        val bundledLegacyConfigFile = File(paths.bootstrapRoot, "bundled-extensions/stai-build-config.json")
+        val serverLegacyConfigFile = File(paths.bootstrapRoot, "server/bundled-extensions/stai-build-config.json")
+        val legacyRepositoriesFile = File(paths.bootstrapRoot, "default-extensions/default-extension-repositories.json")
+        val bundledLegacyRepositoriesFile = File(paths.bootstrapRoot, "bundled-extensions/default-extension-repositories.json")
+        val serverLegacyRepositoriesFile = File(paths.bootstrapRoot, "server/bundled-extensions/default-extension-repositories.json")
         val repositoriesFile = when {
             packagedConfigFile.isFile -> packagedConfigFile
+            bundledLegacyConfigFile.isFile -> bundledLegacyConfigFile
+            serverLegacyConfigFile.isFile -> serverLegacyConfigFile
             legacyRepositoriesFile.isFile -> legacyRepositoriesFile
+            bundledLegacyRepositoriesFile.isFile -> bundledLegacyRepositoriesFile
+            serverLegacyRepositoriesFile.isFile -> serverLegacyRepositoriesFile
             else -> return emptyList()
         }
         if (!repositoriesFile.isFile) {
@@ -1695,6 +1754,65 @@ internal class BootstrapSettingsExtensionsCoordinator(
             ?.ifBlank { null }
     }
 
+    private fun ensureRemoteSourcesReachable(normalizedRepositories: List<NormalizedExtensionRepository>) {
+        if (normalizedRepositories.none(::requiresGithubReachabilityCheck)) {
+            return
+        }
+
+        ensureGithubReachable()
+    }
+
+    private fun requiresGithubReachabilityCheck(repository: NormalizedExtensionRepository): Boolean {
+        val host = runCatching { Uri.parse(repository.cloneUrl).host.orEmpty().lowercase() }.getOrDefault("")
+        return host == "github.com" || host == "www.github.com"
+    }
+
+    private fun ensureGithubReachable() {
+        val failures = mutableListOf<String>()
+        val checks = listOf(
+            Triple("github.com", "https://github.com/robots.txt", setOf(200, 301, 302, 307, 308)),
+            Triple("raw.githubusercontent.com", "https://raw.githubusercontent.com/github/gitignore/main/README.md", setOf(200, 301, 302, 307, 308)),
+            Triple("api.github.com", "https://api.github.com/rate_limit", setOf(200, 301, 302, 307, 308, 403))
+        )
+
+        checks.forEach { (label, targetUrl, acceptedStatusCodes) ->
+            val statusCode = runCatching { fetchReachabilityStatusCode(targetUrl) }.getOrElse { error ->
+                failures += "$label (${error.message ?: "连接失败"})"
+                return@forEach
+            }
+
+            if (statusCode !in acceptedStatusCodes) {
+                failures += "$label (HTTP $statusCode)"
+            }
+        }
+
+        if (failures.isNotEmpty()) {
+            throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_github_unreachable, failures.joinToString(separator = "；")))
+        }
+    }
+
+    private fun fetchReachabilityStatusCode(targetUrl: String): Int {
+        val connection = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 8_000
+            readTimeout = 8_000
+            setRequestProperty("Accept", "*/*")
+            setRequestProperty("User-Agent", "STAI-Android-Host")
+        }
+
+        return try {
+            val responseCode = connection.responseCode
+            (if (responseCode in 200..299) connection.inputStream else connection.errorStream)
+                ?.use { stream ->
+                    stream.read()
+                }
+            responseCode
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun isSupportedRepositoryUrl(repositoryUrl: String): Boolean {
         return normalizeRepositoryUrl(repositoryUrl) != null
     }
@@ -1816,13 +1934,15 @@ internal class BootstrapSettingsExtensionsCoordinator(
             PROOT_LIB_DIR="${'$'}{HOST_PROOT_LIB_DIR:?HOST_PROOT_LIB_DIR is required}"
             PROOT_LOADER_PATH="${'$'}{HOST_PROOT_LOADER:?HOST_PROOT_LOADER is required}"
             PROOT_LOADER_32_PATH="${'$'}{HOST_PROOT_LOADER_32:-}"
+            HOST_PREFIX_DIR="${'$'}{HOST_PREFIX_DIR:?HOST_PREFIX_DIR is required}"
+            HOST_RUNTIME_PREFIX="${'$'}{HOST_RUNTIME_PREFIX:-/data/data/com.termux/files/usr}"
             LINUX_FS_DIR="${'$'}ROOTFS_DIR/fs"
             PROOT_TMP_DIR="${'$'}{HOST_TMP_DIR:?HOST_TMP_DIR is required}"
             ANDROID_RESOLV_CONF="${'$'}ROOTFS_DIR/android-resolv.conf"
             SERVER_MOUNT="/tavern/server"
             DATA_MOUNT="/tavern/data"
             LOGS_MOUNT="/tavern/logs"
-            GUEST_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+            GUEST_PATH="${'$'}HOST_RUNTIME_PREFIX/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
             assert_file() {
                 	if [ ! -f "${'$'}1" ]; then
@@ -1842,10 +1962,12 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 assert_dir "${'$'}PROOT_LIB_DIR" "缺少 host proot 依赖目录：${'$'}PROOT_LIB_DIR"
                 assert_file "${'$'}PROOT_LOADER_PATH" "缺少 host proot loader：${'$'}PROOT_LOADER_PATH"
                 assert_dir "${'$'}LINUX_FS_DIR" "缺少 Linux rootfs：${'$'}LINUX_FS_DIR"
+                assert_dir "${'$'}HOST_PREFIX_DIR" "缺少 host prefix 目录：${'$'}HOST_PREFIX_DIR"
                 assert_file "${'$'}ANDROID_RESOLV_CONF" "缺少 Android DNS 配置：${'$'}ANDROID_RESOLV_CONF"
                 assert_dir "${'$'}SERVER_DIR" "缺少 Tavern 服务目录：${'$'}SERVER_DIR"
 
                 mkdir -p "${'$'}APP_DATA_ROOT" "${'$'}LOGS_DIR" "${'$'}PROOT_TMP_DIR"
+                mkdir -p "${'$'}LINUX_FS_DIR${'$'}HOST_RUNTIME_PREFIX"
                 chmod 1777 "${'$'}PROOT_TMP_DIR"
 
                 if [ -d "${'$'}PROOT_LIB_DIR" ]; then
@@ -1859,28 +1981,29 @@ internal class BootstrapSettingsExtensionsCoordinator(
             fi
 
             export PROOT_TMP_DIR
+                export PREFIX="${'$'}HOST_RUNTIME_PREFIX"
             export TMPDIR=/tmp
             export TMP=/tmp
             export TEMP=/tmp
             export HOME=/tmp
 
-                if [ -f "${'$'}SERVER_DIR/dependency-env.sh" ]; then
-                    # shellcheck disable=SC1091
-                    . "${'$'}SERVER_DIR/dependency-env.sh"
-                fi
-                export PATH="${'$'}PATH:${'$'}GUEST_PATH"
+                export PATH="${'$'}GUEST_PATH${'$'}{PATH:+:${'$'}PATH}"
 
                 exec "${'$'}PROOT_BIN" -r "${'$'}LINUX_FS_DIR" \
             	-b /dev \
             	-b /proc \
             	-b /sys \
+                	-b /system \
+                	-b /apex \
+                	-b /vendor \
                 	-b "${'$'}PROOT_TMP_DIR:/tmp" \
+                	-b "${'$'}HOST_PREFIX_DIR:${'$'}HOST_RUNTIME_PREFIX" \
                 	-b "${'$'}ANDROID_RESOLV_CONF:/etc/resolv.conf" \
                 	-b "${'$'}SERVER_DIR:${'$'}SERVER_MOUNT" \
                 	-b "${'$'}APP_DATA_ROOT:${'$'}DATA_MOUNT" \
                 	-b "${'$'}LOGS_DIR:${'$'}LOGS_MOUNT" \
                 	-w "${'$'}SERVER_MOUNT" \
-                	/bin/sh -lc 'cd /tavern/server; if [ -f ./dependency-env.sh ]; then . ./dependency-env.sh; fi; NODE_BIN="${'$'}{TAVERN_NODE_BIN:-./node/bin/node}"; if [ ! -x "${'$'}NODE_BIN" ]; then NODE_BIN="$(command -v node || true)"; fi; if [ -z "${'$'}NODE_BIN" ] || [ ! -x "${'$'}NODE_BIN" ]; then echo "缺少可执行的 Node runtime，请确认已导入 node 依赖包。" >&2; exit 1; fi; "${'$'}NODE_BIN" "${'$'}COMMAND_JS"'
+                    /bin/sh -lc 'cd /tavern/server; NODE_BIN="$(command -v node || true)"; if [ -z "${'$'}NODE_BIN" ] || [ ! -x "${'$'}NODE_BIN" ]; then NODE_BIN="./node/bin/node"; fi; if [ -z "${'$'}NODE_BIN" ] || [ ! -x "${'$'}NODE_BIN" ]; then echo "缺少可执行的 Node runtime，请确认已导入 node 依赖包。" >&2; exit 1; fi; "${'$'}NODE_BIN" "${'$'}COMMAND_JS"'
         """.trimIndent()
     }
 

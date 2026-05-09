@@ -2,6 +2,8 @@ package com.stai.sillytavern
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.system.ErrnoException
+import android.system.Os
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -19,6 +21,7 @@ internal object BootConfig {
     const val readinessProbeAttempts = 300
     const val readinessPath = "/"
     const val bootstrapAssetRoot = "bootstrap"
+    const val guestRuntimePrefix = "/data/data/com.termux/files/usr"
     const val notificationChannelId = "android-tavern-bootstrap"
     const val systemNotificationChannelId = "android-tavern-system-notification"
     const val notificationId = 1101
@@ -169,7 +172,7 @@ internal class AssetExtractor(private val context: Context) {
             replaceOnIncomplete = false,
             requiredRelativePaths = listOf(
                 "fs/bin/sh",
-                "fs/usr/lib/aarch64-linux-gnu/libatomic.so.1",
+                "fs/etc/ssl/certs/ca-certificates.crt",
                 "rootfs-manifest.json"
             )
         )
@@ -240,8 +243,9 @@ internal class AssetExtractor(private val context: Context) {
                 48
             )
             var lastServerProgress = 48
+            val serverArchiveAssetPath = resolveServerArchiveAssetPath()
             extractArchiveAsset(
-                assetPath = "${BootConfig.bootstrapAssetRoot}/server/server-payload.zip",
+                assetPath = serverArchiveAssetPath,
                 targetDirectory = paths.serverDir,
                 shouldSetExecutable = { relativePath -> relativePath.endsWith(".sh", ignoreCase = true) },
                 onProgress = { processedEntries, totalEntries ->
@@ -284,18 +288,17 @@ internal class AssetExtractor(private val context: Context) {
         )
 
         onProgress(
-            "正在同步宿主内置扩展。",
-            "正在把解压后的 host 扩展安装到用户 extensions 目录。",
+            "正在同步启动脚本与内置扩展资产。",
+            "正在写入 bootstrap 脚本、配置与内置扩展目录。",
             74
         )
-        installBundledHostExtensions(paths, replaceExisting = serverDirectoryRefreshed)
-
+        copyNode(AssetCopySpec(BootConfig.bootstrapAssetRoot, paths.bootstrapRoot), skippedAssetRoots)
         onProgress(
-            "正在同步启动脚本。",
-            "正在写入 bootstrap 脚本与宿主资源目录。",
+            "正在同步宿主内置扩展。",
+            "正在把 APK 内置的 host 扩展安装到用户 extensions 目录。",
             76
         )
-        copyNode(AssetCopySpec(BootConfig.bootstrapAssetRoot, paths.bootstrapRoot), skippedAssetRoots)
+        installBundledHostExtensions(paths, replaceExisting = true)
         onProgress(
             "正在刷新 Linux 宿主目录。",
             "正在准备 usr、tmp 与运行时依赖目录。",
@@ -343,6 +346,21 @@ internal class AssetExtractor(private val context: Context) {
         }
     }
 
+    private fun resolveServerArchiveAssetPath(): String {
+        val manifestAssetPath = "${BootConfig.bootstrapAssetRoot}/server/bootstrap-manifest.json"
+        val archiveFile = runCatching {
+            context.assets.open(manifestAssetPath).bufferedReader().use { reader ->
+                JSONObject(reader.readText()).optString("archiveFile").trim()
+            }
+        }.getOrDefault("")
+
+        return if (archiveFile.isBlank()) {
+            "${BootConfig.bootstrapAssetRoot}/server/server-payload.zip"
+        } else {
+            "${BootConfig.bootstrapAssetRoot}/server/$archiveFile"
+        }
+    }
+
     private fun File.containsExecutableFiles(requiredRelativePaths: List<String>): Boolean {
         return requiredRelativePaths.all { relativePath ->
             File(this, relativePath).canExecute()
@@ -353,6 +371,7 @@ internal class AssetExtractor(private val context: Context) {
         assetPath: String,
         targetDirectory: File,
         shouldSetExecutable: (String) -> Boolean,
+        symlinkManifestRelativePath: String? = null,
         onProgress: (processedEntries: Int, totalEntries: Int) -> Unit = { _, _ -> }
     ) {
         if (targetDirectory.exists()) {
@@ -400,6 +419,10 @@ internal class AssetExtractor(private val context: Context) {
                 }
             }
         }
+
+        if (symlinkManifestRelativePath != null) {
+            applySymlinkManifest(targetDirectory, File(targetDirectory, symlinkManifestRelativePath))
+        }
     }
 
     private fun countArchiveEntries(assetPath: String): Int {
@@ -417,6 +440,54 @@ internal class AssetExtractor(private val context: Context) {
             }
         }
         return totalEntries.coerceAtLeast(1)
+    }
+
+    private fun applySymlinkManifest(targetDirectory: File, manifestFile: File) {
+        if (!manifestFile.isFile) {
+            return
+        }
+
+        val canonicalTargetDirectory = targetDirectory.canonicalFile
+        val canonicalTargetPrefix = canonicalTargetDirectory.path + File.separator
+
+        manifestFile.bufferedReader().useLines { lines ->
+            lines.filter { line -> line.isNotBlank() }.forEach { line ->
+                val parts = line.split('←', limit = 2)
+                if (parts.size != 2) {
+                    throw BootstrapException("bootstrap symlink manifest 格式非法：$line")
+                }
+
+                val linkTarget = parts[0].trim()
+                val relativePath = parts[1].trim().removePrefix("./").trimStart('/')
+                if (linkTarget.isBlank() || relativePath.isBlank()) {
+                    throw BootstrapException("bootstrap symlink manifest 包含空路径：$line")
+                }
+
+                val linkFile = File(targetDirectory, relativePath)
+                linkFile.parentFile?.mkdirs()
+
+                val canonicalLinkPath = linkFile.canonicalFile.path
+                if (canonicalLinkPath != canonicalTargetDirectory.path && !canonicalLinkPath.startsWith(canonicalTargetPrefix)) {
+                    throw BootstrapException("bootstrap symlink 路径非法：$relativePath")
+                }
+
+                if (linkFile.exists()) {
+                    if (linkFile.isDirectory) {
+                        linkFile.deleteRecursively()
+                    } else {
+                        linkFile.delete()
+                    }
+                }
+
+                try {
+                    Os.symlink(linkTarget, linkFile.absolutePath)
+                } catch (error: ErrnoException) {
+                    throw BootstrapException("创建 bootstrap symlink 失败：$relativePath -> $linkTarget (${error.message})")
+                }
+            }
+        }
+
+        manifestFile.delete()
     }
 
     private fun runServerPostExtractHook(paths: HostPaths) {
@@ -450,7 +521,7 @@ internal class AssetExtractor(private val context: Context) {
     }
 
     private fun installBundledHostExtensions(paths: HostPaths, replaceExisting: Boolean) {
-        val bundledExtensionsRoot = File(paths.serverDir, "bundled-extensions")
+        val bundledExtensionsRoot = File(paths.bootstrapRoot, "bundled-extensions")
         if (!bundledExtensionsRoot.isDirectory) {
             return
         }
@@ -525,9 +596,18 @@ internal class AssetExtractor(private val context: Context) {
     private fun refreshHostPrefixDirectory(paths: HostPaths, rootfsDirectoryRefreshed: Boolean) {
         val hostPrefixRequiredFiles = listOf(
             "bin/proot",
+            "bin/sh",
+            "etc/tls/cert.pem",
             "libexec/proot/loader"
         )
-        val shouldRefreshHostPrefix = rootfsDirectoryRefreshed || !paths.hostPrefixDir.containsRequiredFiles(hostPrefixRequiredFiles)
+        val hostPrefixExecutableFiles = listOf(
+            "bin/proot",
+            "bin/sh",
+            "libexec/proot/loader"
+        )
+        val shouldRefreshHostPrefix = rootfsDirectoryRefreshed ||
+            !paths.hostPrefixDir.containsRequiredFiles(hostPrefixRequiredFiles) ||
+            !paths.hostPrefixDir.containsExecutableFiles(hostPrefixExecutableFiles)
         if (!shouldRefreshHostPrefix) {
             paths.hostTmpDir.mkdirs()
             return
@@ -542,10 +622,10 @@ internal class AssetExtractor(private val context: Context) {
             targetDirectory = paths.hostPrefixDir,
             shouldSetExecutable = { relativePath ->
                 relativePath.endsWith(".sh", ignoreCase = true) ||
-                    relativePath == "bin/proot" ||
-                    relativePath == "libexec/proot/loader" ||
-                    relativePath == "libexec/proot/loader32"
-            }
+                    relativePath.startsWith("bin/") ||
+                    relativePath.startsWith("libexec/")
+            },
+            symlinkManifestRelativePath = "SYMLINKS.txt"
         )
         paths.hostTmpDir.mkdirs()
     }
@@ -812,6 +892,8 @@ internal class LinuxRuntimeLauncher(private val paths: HostPaths) {
         environment["HOST_PROOT_BIN"] = paths.hostProotBinary.absolutePath
         environment["HOST_PROOT_LIB_DIR"] = paths.hostLibDir.absolutePath
         environment["HOST_PROOT_LOADER"] = paths.hostProotLoader.absolutePath
+        environment["HOST_PREFIX_DIR"] = paths.hostPrefixDir.absolutePath
+        environment["HOST_RUNTIME_PREFIX"] = BootConfig.guestRuntimePrefix
         if (paths.hostProotLoader32.exists()) {
             environment["HOST_PROOT_LOADER_32"] = paths.hostProotLoader32.absolutePath
         }

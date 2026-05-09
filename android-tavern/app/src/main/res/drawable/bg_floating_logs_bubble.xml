@@ -1,8 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="oval">
-    <solid android:color="@color/floating_logs_bubble_background" />
-    <stroke
-        android:width="1dp"
-        android:color="@color/floating_logs_bubble_stroke" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <gradient
+                android:angle="315"
+                android:centerColor="@color/floating_logs_bubble_background"
+                android:endColor="@color/floating_logs_bubble_background_end"
+                android:startColor="@color/floating_logs_bubble_background_start" />
+            <stroke
+                android:width="1.5dp"
+                android:color="@color/floating_logs_bubble_stroke" />
+        </shape>
+    </item>
+
+    <item
+        android:bottom="31dp"
+        android:left="9dp"
+        android:right="9dp"
+        android:top="6dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/floating_logs_bubble_highlight" />
+        </shape>
+    </item>
+</layer-list>

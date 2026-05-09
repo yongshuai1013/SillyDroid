@@ -25,7 +25,7 @@
     <string name="download_failed_unknown">系统未返回失败详情。</string>
     <string name="download_failed_empty_payload">导出内容为空。</string>
     <string name="floating_logs_bubble_label">日志</string>
-    <string name="floating_logs_bubble_description">打开实时日志悬浮窗</string>
+    <string name="floating_logs_bubble_description">打开或收起实时日志悬浮窗</string>
     <string name="floating_logs_panel_title">实时日志</string>
     <string name="floating_logs_panel_close">关闭实时日志悬浮窗</string>
     <string name="bootstrap_settings_title">酒馆启动设置</string>
@@ -44,7 +44,9 @@
     <string name="bootstrap_settings_settings_summary">端口和服务配置集中在这里，按分组折叠显示。</string>
     <string name="bootstrap_settings_about_summary">这里集中显示当前宿主说明、版本信息和应用更新入口，主界面不再单独保留更新按钮。</string>
     <string name="bootstrap_settings_about_info_title">应用信息</string>
-    <string name="bootstrap_settings_about_info_body">SillyTavern Android 宿主负责在本机启动 Tavern 服务、管理扩展和执行完整数据迁移。关于页只展示宿主信息与更新状态，不会改动当前 Tavern 配置。</string>
+    <string name="bootstrap_settings_about_info_body">SillyTavern Android 宿主负责在本机启动 Tavern 服务、管理扩展和执行完整数据迁移。关于页会集中展示宿主信息、运行时来源和更新状态，不会直接改动当前 Tavern 配置。</string>
+    <string name="bootstrap_settings_about_license_title">Termux 与第三方许可证</string>
+    <string name="bootstrap_settings_about_license_body">当前 Android 运行时基于 Termux 生态的 prefix、bootstrap 约定和部分运行时资源构建。分发或二次打包时，请同时保留 Termux 及其他上游组件的版权声明与许可证文本。Termux app 上游仓库采用 GPLv3 only，具体例外与第三方说明见仓库根目录的 THIRD_PARTY_NOTICES.md。</string>
     <string name="bootstrap_settings_about_version_title">版本信息</string>
     <string name="bootstrap_settings_about_version_apk">APK版本：%1$s</string>
     <string name="bootstrap_settings_about_version_code">APK版本号：%1$s</string>
@@ -111,6 +113,8 @@
     <string name="bootstrap_settings_extensions_action_cleanup_broken">清理错误插件</string>
     <string name="bootstrap_settings_extensions_default_title">安装默认扩展</string>
     <string name="bootstrap_settings_extensions_default_empty">当前没有可安装的默认扩展列表。</string>
+    <string name="bootstrap_settings_extensions_default_prompt_title">检测到默认扩展</string>
+    <string name="bootstrap_settings_extensions_default_prompt_message">当前宿主已经解压完成，检测到 %1$d 个可选默认扩展源。是否现在选择并安装默认扩展？</string>
     <string name="bootstrap_settings_extensions_default_select_required">请至少选择一个默认扩展。</string>
     <string name="bootstrap_settings_extensions_default_existing_strategy_title">默认扩展已安装时怎么处理？</string>
     <string name="bootstrap_settings_extensions_default_existing_strategy_message">如果选中的默认扩展里已有同名目标目录，可以直接覆盖，也可以跳过这些已安装项，只安装缺失的默认扩展。</string>
@@ -149,6 +153,7 @@
     <string name="bootstrap_settings_extensions_batch_result_failures">失败：</string>
     <string name="bootstrap_settings_extensions_batch_result_source">来源：%1$s</string>
     <string name="bootstrap_settings_extensions_batch_result_log">日志：%1$s</string>
+    <string name="bootstrap_settings_extensions_github_unreachable">当前网络无法完整访问 GitHub，扩展安装前请先确认这些地址可用：%1$s</string>
     <string name="bootstrap_settings_extensions_cleanup_broken_empty">当前没有缺少 manifest.json 的错误插件目录。</string>
     <string name="bootstrap_settings_extensions_cleanup_broken_confirm_title">清理错误插件？</string>
     <string name="bootstrap_settings_extensions_cleanup_broken_confirm_message">检测到 %1$d 个缺少 manifest.json 的目录，确认后会直接删除：
