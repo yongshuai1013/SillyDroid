@@ -309,30 +309,7 @@ jobs:
 
           mkdir -p "$dependency_dir"
 
-            enabled="$(python3 - <<'PY'
-            import json
-            import pathlib
-
-            config_path = pathlib.Path('stai-build-config.json')
-            if not config_path.exists():
-              print('true')
-              raise SystemExit(0)
-
-            try:
-              payload = json.loads(config_path.read_text(encoding='utf-8'))
-            except Exception:
-              print('true')
-              raise SystemExit(0)
-
-            value = (((payload or {}).get('build') or {}).get('includeDependencyPacks'))
-            if value is None or not isinstance(value, list):
-              print('true')
-              raise SystemExit(0)
-
-            normalized = [str(item).strip() for item in value if str(item).strip()]
-            print('true' if normalized else 'false')
-            PY
-          )"
+          enabled="$(python3 -c "import json; value = (json.load(open('stai-build-config.json', encoding='utf-8')).get('build') or {}).get('includeDependencyPacks'); normalized = [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else None; print('true' if normalized is None or normalized else 'false')")"
 
           printf 'enabled=%s\n' "$enabled" >> "$GITHUB_OUTPUT"
 
