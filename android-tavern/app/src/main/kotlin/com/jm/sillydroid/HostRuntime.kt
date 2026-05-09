@@ -6,8 +6,10 @@ import android.system.ErrnoException
 import android.system.Os
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlin.io.copyRecursively
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
@@ -319,11 +321,7 @@ internal class AssetExtractor(private val context: Context) {
         requiredRelativePaths: List<String>,
         requiredExecutableRelativePaths: List<String> = emptyList()
     ): Boolean {
-        val bundledManifest = context.assets.open(manifestAssetPath).bufferedReader().use { reader ->
-            reader.readText()
-        }
-
-        if (installedManifestFile.exists() && installedManifestFile.readText() == bundledManifest) {
+        if (installedManifestFile.isFile && assetContentMatchesFile(manifestAssetPath, installedManifestFile)) {
             if (
                 targetDirectory.containsRequiredFiles(requiredRelativePaths) &&
                 targetDirectory.containsExecutableFiles(requiredExecutableRelativePaths)
@@ -342,6 +340,33 @@ internal class AssetExtractor(private val context: Context) {
         }
         targetDirectory.mkdirs()
         return true
+    }
+
+    private fun assetContentMatchesFile(assetPath: String, file: File): Boolean {
+        return runCatching {
+            context.assets.open(assetPath).use { assetInput ->
+                digestOf(assetInput) == digestOf(file)
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun digestOf(file: File): String {
+        file.inputStream().buffered().use { fileInput ->
+            return digestOf(fileInput)
+        }
+    }
+
+    private fun digestOf(input: InputStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        var read = input.read(buffer)
+        while (read >= 0) {
+            if (read > 0) {
+                digest.update(buffer, 0, read)
+            }
+            read = input.read(buffer)
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private fun File.containsRequiredFiles(requiredRelativePaths: List<String>): Boolean {
@@ -556,8 +581,48 @@ internal class AssetExtractor(private val context: Context) {
                     targetDirectory.deleteRecursively()
                 }
 
-                sourceDirectory.copyRecursively(targetDirectory, overwrite = true)
+                copyBundledHostExtensionSafely(sourceDirectory, targetDirectory)
             }
+    }
+
+    private fun copyBundledHostExtensionSafely(sourceDirectory: File, targetDirectory: File) {
+        var lastError: Throwable? = null
+        repeat(2) { attempt ->
+            val stageDirectory = File(
+                targetDirectory.parentFile,
+                "${targetDirectory.name}.sillydroid-stage-${System.currentTimeMillis()}-$attempt"
+            )
+            try {
+                stageDirectory.deleteRecursively()
+                if (!sourceDirectory.copyRecursively(stageDirectory, overwrite = true)) {
+                    throw IOException("copyRecursively returned false")
+                }
+
+                val sourceManifest = File(sourceDirectory, "manifest.json")
+                val stageManifest = File(stageDirectory, "manifest.json")
+                if (!stageManifest.isFile) {
+                    throw IOException("staged manifest.json missing")
+                }
+                if (sourceManifest.isFile && sourceManifest.length() != stageManifest.length()) {
+                    throw IOException("staged manifest size mismatch")
+                }
+
+                targetDirectory.deleteRecursively()
+                if (!stageDirectory.renameTo(targetDirectory)) {
+                    if (!stageDirectory.copyRecursively(targetDirectory, overwrite = true)) {
+                        throw IOException("failed to promote staged extension")
+                    }
+                    stageDirectory.deleteRecursively()
+                }
+                return
+            } catch (error: Throwable) {
+                lastError = error
+                stageDirectory.deleteRecursively()
+                targetDirectory.deleteRecursively()
+            }
+        }
+
+        throw IOException("install bundled host extension failed", lastError)
     }
 
     private fun copyNode(spec: AssetCopySpec, skippedAssetRoots: Set<String>) {
