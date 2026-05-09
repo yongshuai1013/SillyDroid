@@ -6,10 +6,6 @@
     <color name="floating_logs_panel_secondary_text">#CBD5E1</color>
     <color name="floating_logs_panel_surface">#1F2937</color>
     <color name="floating_logs_panel_content">#E5E7EB</color>
-    <color name="floating_logs_bubble_background_start">#5EEAD4</color>
-    <color name="floating_logs_bubble_background">#14B8A6</color>
-    <color name="floating_logs_bubble_background_end">#0F766E</color>
-    <color name="floating_logs_bubble_highlight">#66F0FDFA</color>
-    <color name="floating_logs_bubble_stroke">#0F766E</color>
+    <color name="floating_logs_bubble_background">#E22E3B4E</color>
     <color name="floating_logs_bubble_text">#F0FDFA</color>
 </resources>

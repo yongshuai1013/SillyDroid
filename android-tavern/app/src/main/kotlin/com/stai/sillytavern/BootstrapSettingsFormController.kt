@@ -20,6 +20,7 @@ import androidx.annotation.AttrRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.core.widget.NestedScrollView
+import androidx.core.widget.TextViewCompat
 import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
@@ -244,7 +245,7 @@ internal class BootstrapSettingsFormController(
         expandedByDefault: Boolean
     ): SectionBinding {
         val cardView = MaterialCardView(activity).apply {
-            radius = dpFloat(22)
+            radius = dimenFloat(R.dimen.stai_card_radius)
             cardElevation = 0f
             strokeWidth = dp(1)
             strokeColor = resolveThemeColor(MaterialR.attr.colorOutlineVariant)
@@ -266,7 +267,7 @@ internal class BootstrapSettingsFormController(
             isClickable = true
             isFocusable = true
             setBackgroundResource(resolveThemeResource(android.R.attr.selectableItemBackground))
-            setPadding(dp(14), dp(14), dp(14), dp(12))
+            setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_space_lg))
         }
 
         val titleRow = LinearLayout(activity).apply {
@@ -276,16 +277,14 @@ internal class BootstrapSettingsFormController(
 
         titleRow.addView(TextView(activity).apply {
             text = section.title
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsSectionTitle)
             setTextColor(resolveThemeColor(MaterialR.attr.colorOnSurface))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
 
         val toggleView = TextView(activity).apply {
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBadge)
+            setPadding(dimen(R.dimen.stai_space_lg), dimen(R.dimen.stai_space_xs), dimen(R.dimen.stai_space_lg), dimen(R.dimen.stai_space_xs))
             setTextColor(resolveThemeColor(MaterialR.attr.colorOnPrimaryContainer))
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -297,9 +296,9 @@ internal class BootstrapSettingsFormController(
         headerLayout.addView(titleRow)
         headerLayout.addView(TextView(activity).apply {
             text = section.summary
-            textSize = 12f
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
             setTextColor(resolveThemeColor(MaterialR.attr.colorOnSurfaceVariant))
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
         })
 
         val dividerView = View(activity).apply {
@@ -313,7 +312,7 @@ internal class BootstrapSettingsFormController(
 
         val contentLayout = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(4), dp(14), dp(12))
+            setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_space_xs), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding))
         }
         val fieldPaths = mutableListOf<String>()
 
@@ -345,7 +344,7 @@ internal class BootstrapSettingsFormController(
         return when (field.kind) {
             TavernConfigFieldKind.BOOLEAN -> {
                 val card = MaterialCardView(activity).apply {
-                    radius = dpFloat(16)
+                    radius = dimenFloat(R.dimen.stai_nested_card_radius)
                     cardElevation = 0f
                     strokeWidth = 0
                     setCardBackgroundColor(resolveThemeColor(MaterialR.attr.colorSurfaceContainerLow))
@@ -359,7 +358,7 @@ internal class BootstrapSettingsFormController(
                 val container = LinearLayout(activity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_space_lg), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_space_lg))
                 }
                 val textContainer = LinearLayout(activity).apply {
                     orientation = LinearLayout.VERTICAL
@@ -367,15 +366,14 @@ internal class BootstrapSettingsFormController(
                 }
                 textContainer.addView(TextView(activity).apply {
                     text = field.title
-                    textSize = 14f
-                    typeface = Typeface.DEFAULT_BOLD
+                    TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsCardTitle)
                     setTextColor(resolveThemeColor(MaterialR.attr.colorOnSurface))
                 })
                 textContainer.addView(TextView(activity).apply {
                     text = field.summary
-                    textSize = 11f
+                    TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
                     setTextColor(resolveThemeColor(MaterialR.attr.colorOnSurfaceVariant))
-                    setPadding(0, dp(2), dp(10), 0)
+                    setPadding(0, dimen(R.dimen.stai_space_xs), dimen(R.dimen.stai_space_lg), 0)
                 })
                 val switch = MaterialSwitch(activity).apply {
                     showText = false
@@ -427,7 +425,7 @@ internal class BootstrapSettingsFormController(
                     hint = field.title
                     helperText = field.summary
                     boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-                    setBoxCornerRadii(dpFloat(14), dpFloat(14), dpFloat(14), dpFloat(14))
+                    setBoxCornerRadii(dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius))
                     setPadding(0, 0, 0, 0)
                     if (field.kind == TavernConfigFieldKind.PASSWORD) {
                         endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
@@ -440,9 +438,9 @@ internal class BootstrapSettingsFormController(
                 val editText = TextInputEditText(inputLayout.context).apply {
                     setText(formatFieldValue(field, currentValue))
                     inputType = resolveInputType(field.kind)
-                    textSize = 14f
-                    minHeight = dp(44)
-                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    textSize = 13f
+                    minHeight = dimen(R.dimen.stai_input_min_height)
+                    setPadding(dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical), dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical))
                     setHorizontallyScrolling(false)
                     when (field.kind) {
                         TavernConfigFieldKind.STRING_LIST,
@@ -520,7 +518,7 @@ internal class BootstrapSettingsFormController(
             helperText = field.summary
             endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-            setBoxCornerRadii(dpFloat(14), dpFloat(14), dpFloat(14), dpFloat(14))
+            setBoxCornerRadii(dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius))
             setPadding(0, 0, 0, 0)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -532,9 +530,9 @@ internal class BootstrapSettingsFormController(
         val editText = TextInputEditText(inputLayout.context).apply {
             setText(formatFieldValue(field, currentValue))
             inputType = resolveInputType(field.kind)
-            textSize = 14f
-            minHeight = dp(44)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            textSize = 13f
+            minHeight = dimen(R.dimen.stai_input_min_height)
+            setPadding(dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical), dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical))
             isSingleLine = true
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             setOnFocusChangeListener { focusedView, hasFocus ->
@@ -549,17 +547,17 @@ internal class BootstrapSettingsFormController(
         inputLayout.addView(editText)
 
         val randomButton = ImageButton(activity).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(38), dp(38)).apply {
-                marginStart = dp(8)
+            layoutParams = LinearLayout.LayoutParams(dimen(R.dimen.stai_icon_button_size), dimen(R.dimen.stai_icon_button_size)).apply {
+                marginStart = dimen(R.dimen.stai_space_md)
                 topMargin = dp(6)
             }
             minimumWidth = 0
             minimumHeight = 0
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setPadding(dimen(R.dimen.stai_icon_button_padding), dimen(R.dimen.stai_icon_button_padding), dimen(R.dimen.stai_icon_button_padding), dimen(R.dimen.stai_icon_button_padding))
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dpFloat(12)
+                cornerRadius = dimenFloat(R.dimen.stai_nested_card_radius)
                 setColor(resolveThemeColor(MaterialR.attr.colorSurfaceContainerHigh))
                 setStroke(dp(1), resolveThemeColor(MaterialR.attr.colorOutlineVariant))
             }
@@ -741,6 +739,14 @@ internal class BootstrapSettingsFormController(
         val typedValue = TypedValue()
         activity.theme.resolveAttribute(attrRes, typedValue, true)
         return typedValue.resourceId
+    }
+
+    private fun dimen(resId: Int): Int {
+        return activity.resources.getDimensionPixelSize(resId)
+    }
+
+    private fun dimenFloat(resId: Int): Float {
+        return activity.resources.getDimension(resId)
     }
 
     private fun dp(value: Int): Int {

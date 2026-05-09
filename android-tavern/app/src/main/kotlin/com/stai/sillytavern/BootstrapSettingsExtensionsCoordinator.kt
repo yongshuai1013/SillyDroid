@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
+import androidx.core.widget.TextViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
@@ -137,7 +138,6 @@ internal class BootstrapSettingsExtensionsCoordinator(
     private var bundledExtensions: List<BundledExtension> = emptyList()
     private var busy = false
     private var progressState: ExtensionProgressState? = null
-    private var defaultRepositoriesPrompted = false
 
     fun initialize() {
         installButton.setOnClickListener {
@@ -151,7 +151,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         reloadExtensions()
     }
 
-    fun reloadExtensions(promptDefaultInstall: Boolean = false) {
+    fun reloadExtensions() {
         if (busy) {
             return
         }
@@ -169,34 +169,10 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 extensions = inventory.installedExtensions
                 bundledExtensions = inventory.bundledExtensions
                 renderExtensions()
-                if (promptDefaultInstall) {
-                    maybePromptInstallDefaultRepositories(inventory)
-                }
             }.onFailure { exception ->
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
             }
         }
-    }
-
-    private fun maybePromptInstallDefaultRepositories(inventory: ExtensionInventory) {
-        if (defaultRepositoriesPrompted) {
-            return
-        }
-
-        val repositories = loadDefaultExtensionRepositories()
-        if (repositories.isEmpty() || !hasMissingDefaultRepositories(repositories, inventory.installedExtensions)) {
-            return
-        }
-
-        defaultRepositoriesPrompted = true
-        MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.bootstrap_settings_extensions_default_prompt_title)
-            .setMessage(activity.getString(R.string.bootstrap_settings_extensions_default_prompt_message, repositories.size))
-            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
-            .setPositiveButton(R.string.bootstrap_settings_extensions_install) { _, _ ->
-                promptInstallDefaultRepositories(repositories)
-            }
-            .show()
     }
 
     private fun hasMissingDefaultRepositories(
@@ -338,22 +314,22 @@ internal class BootstrapSettingsExtensionsCoordinator(
             orientation = LinearLayout.VERTICAL
             addView(TextView(activity).apply {
                 text = title
+                TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsSectionTitle)
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
-                textSize = 12f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             })
             addView(TextView(activity).apply {
                 text = summary
+                TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-                textSize = 10f
-                setPadding(0, dp(2), 0, 0)
+                setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
             })
         }
     }
 
     private fun createBundledInstallCard(extension: BundledExtension): MaterialCardView {
         val card = MaterialCardView(activity).apply {
-            radius = dp(16).toFloat()
+            radius = dimenFloat(R.dimen.stai_nested_card_radius)
             strokeWidth = dp(1)
             strokeColor = resolveColor(MaterialR.attr.colorOutlineVariant)
             setCardBackgroundColor(resolveColor(MaterialR.attr.colorSurfaceContainerLow))
@@ -362,7 +338,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding))
         }
 
         val infoColumn = LinearLayout(activity).apply {
@@ -371,23 +347,23 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
         infoColumn.addView(TextView(activity).apply {
             text = extension.displayName
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsCardTitle)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
-            textSize = 15f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         infoColumn.addView(TextView(activity).apply {
             val versionLabel = extension.version ?: activity.getString(R.string.bootstrap_settings_extensions_version_unknown)
             val authorLabel = extension.author ?: activity.getString(R.string.bootstrap_settings_extensions_author_unknown)
             text = "$versionLabel  •  $authorLabel"
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-            textSize = 11f
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
         })
         infoColumn.addView(TextView(activity).apply {
             text = activity.getString(R.string.bootstrap_settings_extensions_bundled_missing_badge, extension.folderName)
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
             setTextColor(resolveColor(MaterialR.attr.colorError))
-            textSize = 11f
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_sm), 0, 0)
         })
         container.addView(infoColumn)
 
@@ -405,7 +381,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
     private fun createExtensionCard(extension: ManagedExtension): MaterialCardView {
         val card = MaterialCardView(activity).apply {
-            radius = dp(16).toFloat()
+            radius = dimenFloat(R.dimen.stai_nested_card_radius)
             strokeWidth = dp(1)
             strokeColor = resolveColor(MaterialR.attr.colorOutlineVariant)
             setCardBackgroundColor(resolveColor(MaterialR.attr.colorSurfaceContainerLow))
@@ -413,13 +389,13 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setPadding(dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding), dimen(R.dimen.stai_section_padding))
         }
 
         container.addView(TextView(activity).apply {
             text = extension.displayName
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsCardTitle)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
-            textSize = 15f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
 
@@ -427,40 +403,40 @@ internal class BootstrapSettingsExtensionsCoordinator(
             val versionLabel = extension.version ?: activity.getString(R.string.bootstrap_settings_extensions_version_unknown)
             val authorLabel = extension.author ?: activity.getString(R.string.bootstrap_settings_extensions_author_unknown)
             text = "$versionLabel  •  $authorLabel"
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-            textSize = 11f
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
         })
 
         container.addView(TextView(activity).apply {
             text = activity.getString(R.string.bootstrap_settings_extensions_folder, extension.folderName)
+            TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsBody)
             setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-            textSize = 11f
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_sm), 0, 0)
         })
 
         if (!extension.homePage.isNullOrBlank()) {
             container.addView(TextView(activity).apply {
                 text = activity.getString(R.string.bootstrap_settings_extensions_source, extension.homePage)
+                TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
                 setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-                textSize = 11f
-                setPadding(0, dp(4), 0, 0)
+                setPadding(0, dimen(R.dimen.stai_space_xs), 0, 0)
             })
         }
 
         if (!extension.manifestHealthy || !extension.manifestMessage.isNullOrBlank()) {
             container.addView(TextView(activity).apply {
                 text = extension.manifestMessage ?: activity.getString(R.string.bootstrap_settings_extensions_manifest_missing)
+                TextViewCompat.setTextAppearance(this, R.style.TextAppearance_SillyTavern_SettingsMeta)
                 setTextColor(resolveColor(MaterialR.attr.colorError))
-                textSize = 11f
-                setPadding(0, dp(6), 0, 0)
+                setPadding(0, dimen(R.dimen.stai_space_sm), 0, 0)
             })
         }
 
         val actionsRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
-            setPadding(0, dp(10), 0, 0)
+            setPadding(0, dimen(R.dimen.stai_space_lg), 0, 0)
         }
 
         val reinstallButton = MaterialButton(activity, null, MaterialR.attr.materialButtonOutlinedStyle).apply {
@@ -485,7 +461,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            layoutParams.marginStart = dp(8)
+            layoutParams.marginStart = dimen(R.dimen.stai_space_md)
             this.layoutParams = layoutParams
             setOnClickListener {
                 confirmDelete(extension)
@@ -739,6 +715,16 @@ internal class BootstrapSettingsExtensionsCoordinator(
         dialog.show()
     }
 
+    fun promptDefaultRepositoriesSelection() {
+        val repositories = loadDefaultExtensionRepositories()
+        if (repositories.isEmpty()) {
+            showMessage(activity.getString(R.string.bootstrap_settings_extensions_default_empty))
+            return
+        }
+
+        promptInstallDefaultRepositories(repositories)
+    }
+
     private fun promptDefaultRepositoryInstallMode(repositoryUrls: List<String>) {
         MaterialAlertDialogBuilder(activity)
             .setTitle(R.string.bootstrap_settings_extensions_default_existing_strategy_title)
@@ -792,6 +778,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
         val inputLayout = TextInputLayout(activity).apply {
             hint = activity.getString(R.string.bootstrap_settings_extensions_install_prompt_hint)
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            setBoxCornerRadii(dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius), dimenFloat(R.dimen.stai_nested_card_radius))
             layoutParams = LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -802,7 +790,9 @@ internal class BootstrapSettingsExtensionsCoordinator(
             setSingleLine(false)
             minLines = 4
             maxLines = 8
-            minHeight = dp(44)
+            textSize = 13f
+            minHeight = dimen(R.dimen.stai_input_min_height)
+            setPadding(dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical), dimen(R.dimen.stai_control_padding_horizontal), dimen(R.dimen.stai_control_padding_vertical))
         }
         inputLayout.addView(inputView)
 
@@ -1019,11 +1009,12 @@ internal class BootstrapSettingsExtensionsCoordinator(
         onPreviewReady: ((BatchExtensionPreview) -> Unit)? = null
     ) {
         activity.lifecycleScope.launch {
+            val previewActionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_preview)
             setProgressState(
-                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_preview),
+                actionLabel = previewActionLabel,
                 stageLabel = activity.getString(R.string.bootstrap_settings_extensions_batch_preview_stage, repositoryUrls.size),
-                percent = null,
-                indeterminate = true
+                percent = 0,
+                indeterminate = false
             )
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
@@ -1031,26 +1022,69 @@ internal class BootstrapSettingsExtensionsCoordinator(
                     ensureRemoteSourcesReachable(repositoryUrls.mapNotNull(::normalizeRepositoryUrl))
                     val previews = mutableListOf<ExtensionInstallPreview>()
                     val failures = mutableListOf<BatchExtensionFailure>()
-                    repositoryUrls.forEach { repositoryUrl ->
+                    repositoryUrls.forEachIndexed { index, repositoryUrl ->
                         val normalizedRepository = normalizeRepositoryUrl(repositoryUrl)
+                        val batchProgress = BatchProgressDescriptor(
+                            currentIndex = index + 1,
+                            totalCount = repositoryUrls.size,
+                            itemLabel = repositoryDisplayLabel(repositoryUrl, normalizedRepository)
+                        )
+                        publishBatchProgress(
+                            actionLabel = previewActionLabel,
+                            descriptor = batchProgress,
+                            stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_prepare),
+                            itemPercent = 0,
+                            indeterminate = false
+                        )
                         if (normalizedRepository == null) {
                             failures += BatchExtensionFailure(
                                 input = repositoryUrl,
                                 message = activity.getString(R.string.bootstrap_settings_extensions_install_invalid_url),
                                 logPath = null
                             )
-                            return@forEach
+                            publishBatchProgress(
+                                actionLabel = previewActionLabel,
+                                descriptor = batchProgress,
+                                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_completed),
+                                itemPercent = 100,
+                                indeterminate = false
+                            )
+                            return@forEachIndexed
                         }
 
                         runCatching {
-                            runExtensionInstallPreview(repositoryUrl, normalizedRepository)
+                            runExtensionInstallPreview(
+                                repositoryUrl,
+                                normalizedRepository,
+                                onProgress = { runtimeProgress ->
+                                    publishBatchRuntimeProgress(
+                                        actionLabel = previewActionLabel,
+                                        descriptor = batchProgress,
+                                        runtimeProgress = runtimeProgress
+                                    )
+                                }
+                            )
                         }.onSuccess { preview ->
                             previews += preview
+                            publishBatchProgress(
+                                actionLabel = previewActionLabel,
+                                descriptor = batchProgress,
+                                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_completed),
+                                itemPercent = 100,
+                                indeterminate = false
+                            )
                         }.onFailure { exception ->
                             failures += toBatchExtensionFailure(
                                 input = repositoryUrl,
                                 fallbackMessage = activity.getString(R.string.bootstrap_settings_extensions_install_failed),
                                 exceptionMessage = exception.message
+                            )
+                            publishBatchProgress(
+                                actionLabel = previewActionLabel,
+                                descriptor = batchProgress,
+                                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_completed),
+                                itemPercent = 100,
+                                indeterminate = false
                             )
                         }
                     }
@@ -1238,28 +1272,55 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
     private fun installPreviewedExtensionsBatch(batchPreview: BatchExtensionPreview) {
         activity.lifecycleScope.launch {
+            val installActionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_install)
             setProgressState(
-                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_install),
+                actionLabel = installActionLabel,
                 stageLabel = activity.getString(R.string.bootstrap_settings_extensions_batch_install_stage, batchPreview.previews.size),
-                percent = null,
-                indeterminate = true
+                percent = 0,
+                indeterminate = false
             )
             setBusyState(true)
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val successes = mutableListOf<ExtensionInstallPreview>()
                     val failures = batchPreview.failures.toMutableList()
-                    batchPreview.previews.forEach { preview ->
+                    batchPreview.previews.forEachIndexed { index, preview ->
+                        val batchProgress = BatchProgressDescriptor(
+                            currentIndex = index + 1,
+                            totalCount = batchPreview.previews.size,
+                            itemLabel = preview.displayName
+                        )
+                        publishBatchProgress(
+                            actionLabel = installActionLabel,
+                            descriptor = batchProgress,
+                            stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_updating),
+                            itemPercent = 0,
+                            indeterminate = false
+                        )
                         runCatching {
                             finalizeInstallPreview(preview)
                         }.onSuccess {
                             successes += preview
+                            publishBatchProgress(
+                                actionLabel = installActionLabel,
+                                descriptor = batchProgress,
+                                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_completed),
+                                itemPercent = 100,
+                                indeterminate = false
+                            )
                         }.onFailure { exception ->
                             failures += toBatchExtensionFailure(
                                 input = preview.repositoryUrl,
                                 fallbackMessage = activity.getString(R.string.bootstrap_settings_extensions_install_failed),
                                 exceptionMessage = exception.message,
                                 fallbackLogPath = preview.previewLogPath
+                            )
+                            publishBatchProgress(
+                                actionLabel = installActionLabel,
+                                descriptor = batchProgress,
+                                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_completed),
+                                itemPercent = 100,
+                                indeterminate = false
                             )
                         }
                     }
@@ -2209,8 +2270,60 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }.getOrNull()
     }
 
+    private data class BatchProgressDescriptor(
+        val currentIndex: Int,
+        val totalCount: Int,
+        val itemLabel: String
+    )
+
     private fun publishRuntimeProgress(actionLabel: String, runtimeProgress: ExtensionRuntimeProgress) {
         val nextState = mapProgressState(actionLabel, runtimeProgress)
+        activity.runOnUiThread {
+            progressState = nextState
+            renderProgress()
+        }
+    }
+
+    private fun publishBatchRuntimeProgress(
+        actionLabel: String,
+        descriptor: BatchProgressDescriptor,
+        runtimeProgress: ExtensionRuntimeProgress
+    ) {
+        val mappedProgress = mapProgressState(actionLabel, runtimeProgress)
+        publishBatchProgress(
+            actionLabel = actionLabel,
+            descriptor = descriptor,
+            stageLabel = mappedProgress.stageLabel,
+            itemPercent = mappedProgress.percent,
+            indeterminate = mappedProgress.indeterminate
+        )
+    }
+
+    private fun publishBatchProgress(
+        actionLabel: String,
+        descriptor: BatchProgressDescriptor,
+        stageLabel: String,
+        itemPercent: Int?,
+        indeterminate: Boolean
+    ) {
+        val overallPercent = itemPercent?.let { percent ->
+            val safePercent = percent.coerceIn(0, 100)
+            ((((descriptor.currentIndex - 1).toDouble() + (safePercent / 100.0)) / descriptor.totalCount.toDouble()) * 100.0)
+                .toInt()
+                .coerceIn(0, 100)
+        }
+        val nextState = ExtensionProgressState(
+            actionLabel = actionLabel,
+            stageLabel = activity.getString(
+                R.string.bootstrap_settings_extensions_batch_item_stage,
+                descriptor.currentIndex,
+                descriptor.totalCount,
+                descriptor.itemLabel,
+                stageLabel
+            ),
+            percent = overallPercent,
+            indeterminate = indeterminate || overallPercent == null
+        )
         activity.runOnUiThread {
             progressState = nextState
             renderProgress()
@@ -2243,6 +2356,21 @@ internal class BootstrapSettingsExtensionsCoordinator(
             percent = percent,
             indeterminate = runtimeProgress.indeterminate || percent == null
         )
+    }
+
+    private fun repositoryDisplayLabel(
+        repositoryUrl: String,
+        normalizedRepository: NormalizedExtensionRepository? = normalizeRepositoryUrl(repositoryUrl)
+    ): String {
+        val cloneUrl = normalizedRepository?.cloneUrl ?: repositoryUrl.trim()
+        val pathSegments = runCatching { Uri.parse(cloneUrl).pathSegments.orEmpty() }.getOrDefault(emptyList())
+            .map(::stripGitSuffix)
+            .filter { it.isNotBlank() }
+        return when {
+            pathSegments.size >= 2 -> pathSegments.takeLast(2).joinToString("/")
+            pathSegments.isNotEmpty() -> pathSegments.joinToString("/")
+            else -> cloneUrl
+        }
     }
 
     private fun scaleProgress(loaded: Int?, total: Int?, minPercent: Int, maxPercent: Int): Int? {
@@ -2309,6 +2437,14 @@ internal class BootstrapSettingsExtensionsCoordinator(
 
     private fun resolveColor(attr: Int): Int {
         return MaterialColors.getColor(activity, attr, 0)
+    }
+
+    private fun dimen(resId: Int): Int {
+        return activity.resources.getDimensionPixelSize(resId)
+    }
+
+    private fun dimenFloat(resId: Int): Float {
+        return activity.resources.getDimension(resId)
     }
 
     private fun dp(value: Int): Int {

@@ -232,8 +232,12 @@ internal class AssetExtractor(private val context: Context) {
             requiredRelativePaths = listOf(
                 "bootstrap-manifest.json",
                 "tavern-entrypoint.sh",
-                "node/bin/node",
-                "dependency-post-extract.sh"
+                "dependency-post-extract.sh",
+                "server.js",
+                "package.json",
+                "package-lock.json",
+                "node_modules/archiver-utils/node_modules/glob/dist/commonjs/walker.js",
+                "node_modules/archiver-utils/node_modules/glob/dist/commonjs/ignore.js"
             )
         )
         if (serverDirectoryRefreshed) {

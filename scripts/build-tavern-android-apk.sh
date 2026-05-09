@@ -317,9 +317,17 @@ prepare_staged_android_project() {
     rm -rf \
         "$staged_root/.gradle" \
         "$staged_root/app/build" \
+        "$staged_root/app/src/main/assets/bootstrap/bundled-extensions" \
+        "$staged_root/app/src/main/assets/bootstrap/default-extensions" \
         "$staged_root/app/src/main/assets/bootstrap/rootfs" \
         "$staged_root/app/src/main/assets/bootstrap/server" \
         "$staged_root/app/src/main/jniLibs/arm64-v8a"
+
+    if [[ -f "$build_config_path" ]]; then
+        cp -f "$build_config_path" "$staged_root/stai-build-config.json"
+    else
+        rm -f "$staged_root/stai-build-config.json"
+    fi
 }
 
 prepare_dependency_packs_artifacts() {
@@ -766,33 +774,6 @@ EOF
     stai_log "已应用 Tavern server 底包：$package_path"
 }
 
-apply_bundled_extensions() {
-    local project_root="$1"
-    local bundled_root="$project_root/app/src/main/assets/bootstrap/bundled-extensions"
-    local default_extensions_root="$project_root/app/src/main/assets/bootstrap/default-extensions"
-    local extensions_source_root="$workspace_root/android-tavern/extensions"
-
-    rm -rf "$bundled_root"
-    rm -rf "$default_extensions_root"
-
-    if [[ ! -d "$extensions_source_root" && ! -f "$build_config_path" ]]; then
-        return
-    fi
-
-    if [[ -d "$extensions_source_root" ]]; then
-        mkdir -p "$bundled_root"
-        cp -R "$extensions_source_root/." "$bundled_root/"
-    fi
-
-    if [[ -f "$build_config_path" ]]; then
-        mkdir -p "$default_extensions_root"
-        cp -f "$build_config_path" "$default_extensions_root/stai-build-config.json"
-    fi
-
-    stai_log "已应用 APK 内置扩展资产：$bundled_root"
-    stai_log "已应用默认扩展列表资产：$default_extensions_root"
-}
-
 android_sdk_root="$(stai_resolve_linux_android_sdk_root)"
 stai_ensure_linux_android_sdk "$android_sdk_root"
 prepare_staged_android_project "$workspace_android_root" "$android_root"
@@ -821,10 +802,9 @@ else
     stai_log "复用 Tavern runtime image：$runtime_image_path"
 fi
 
-stai_progress_stage 5 6 "开始把 runtime image、server payload 和内置扩展写入 Android 工程"
+stai_progress_stage 5 6 "开始把 runtime image 和 server payload 写入缓存 Android 工程"
 apply_runtime_image "$runtime_image_path" "$android_root"
 apply_server_package "$server_package_path" "$android_root"
-apply_bundled_extensions "$android_root"
 
 stai_progress_stage 6 6 "开始执行 Gradle 任务：$gradle_task"
 (

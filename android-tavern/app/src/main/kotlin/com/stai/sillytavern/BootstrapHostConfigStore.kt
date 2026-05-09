@@ -12,8 +12,21 @@ internal class BootstrapHostConfigStore(context: Context) {
         private const val preferencesName = "bootstrap-host-config"
         private const val servicePortKey = "service-port"
         private const val floatingLogBubbleEnabledKey = "floating-log-bubble-enabled"
+        private const val floatingLogRefreshIntervalMillisKey = "floating-log-refresh-interval-millis"
         private const val floatingLogBubbleXKey = "floating-log-bubble-x"
         private const val floatingLogBubbleYKey = "floating-log-bubble-y"
+        private const val defaultExtensionsPromptConsumedKey = "default-extensions-prompt-consumed"
+
+        const val floatingLogRefreshIntervalRealtimeMillis = 250
+        const val floatingLogRefreshIntervalOneSecondMillis = 1_000
+        const val floatingLogRefreshIntervalThreeSecondsMillis = 3_000
+        const val floatingLogRefreshIntervalFiveSecondsMillis = 5_000
+        val floatingLogRefreshIntervalOptions = intArrayOf(
+            floatingLogRefreshIntervalRealtimeMillis,
+            floatingLogRefreshIntervalOneSecondMillis,
+            floatingLogRefreshIntervalThreeSecondsMillis,
+            floatingLogRefreshIntervalFiveSecondsMillis
+        )
     }
 
     private val appContext = context.applicationContext
@@ -32,6 +45,22 @@ internal class BootstrapHostConfigStore(context: Context) {
         set(value) {
             preferences.edit()
                 .putBoolean(floatingLogBubbleEnabledKey, value)
+                .apply()
+        }
+
+    var floatingLogRefreshIntervalMillis: Int
+        get() = sanitizeFloatingLogRefreshIntervalMillis(
+            preferences.getInt(
+                floatingLogRefreshIntervalMillisKey,
+                floatingLogRefreshIntervalOneSecondMillis
+            )
+        )
+        set(value) {
+            preferences.edit()
+                .putInt(
+                    floatingLogRefreshIntervalMillisKey,
+                    sanitizeFloatingLogRefreshIntervalMillis(value)
+                )
                 .apply()
         }
 
@@ -58,11 +87,25 @@ internal class BootstrapHostConfigStore(context: Context) {
             }.apply()
         }
 
+    var defaultExtensionsPromptConsumed: Boolean
+        get() = preferences.getBoolean(defaultExtensionsPromptConsumedKey, false)
+        set(value) {
+            preferences.edit()
+                .putBoolean(defaultExtensionsPromptConsumedKey, value)
+                .apply()
+        }
+
     private fun sanitizeServicePort(value: Int): Int {
         return value.takeIf { it in 1..65535 } ?: BootConfig.defaultServicePort
     }
 
     private fun sanitizeFraction(value: Float): Float {
         return value.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 1f
+    }
+
+    private fun sanitizeFloatingLogRefreshIntervalMillis(value: Int): Int {
+        return value.takeIf { candidate ->
+            floatingLogRefreshIntervalOptions.contains(candidate)
+        } ?: floatingLogRefreshIntervalOneSecondMillis
     }
 }

@@ -9,11 +9,14 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">?attr/colorSurfaceContainerLowest</item>
+        <item name="materialButtonStyle">@style/Widget.SillyTavern.SettingsButton</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.SillyTavern.SettingsButton.Outlined</item>
     </style>
 
     <style name="TextAppearance.SillyTavern.SettingsToolbarTitle" parent="TextAppearance.Material3.TitleMedium">
         <item name="android:textSize">17sp</item>
         <item name="android:textStyle">bold</item>
+        <item name="lineHeight">20sp</item>
     </style>
 
     <style name="TextAppearance.SillyTavern.SettingsTab" parent="TextAppearance.Material3.LabelLarge">

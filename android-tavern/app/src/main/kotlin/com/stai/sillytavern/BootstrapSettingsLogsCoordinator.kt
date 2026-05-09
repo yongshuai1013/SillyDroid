@@ -1,20 +1,22 @@
 package com.stai.sillytavern
 
 import android.net.Uri
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.widget.TextView
 
 internal class BootstrapSettingsLogsCoordinator(
     private val activity: AppCompatActivity,
     private val metaView: TextView,
     private val emptyView: TextView,
     private val contentView: TextView,
+    private val selectButton: MaterialButton,
     private val exportButton: MaterialButton,
     private val reloadButton: MaterialButton,
     private val setBusy: (Boolean) -> Unit,
@@ -24,8 +26,13 @@ internal class BootstrapSettingsLogsCoordinator(
 ) {
     private var busy = false
     private var currentSnapshot: HostLogSnapshot? = null
+    private var currentEntries: List<HostLogEntry> = emptyList()
+    private var selectedLogPath: String? = null
 
     fun initialize() {
+        selectButton.setOnClickListener {
+            showLogSelectionDialog()
+        }
         exportButton.setOnClickListener {
             val snapshot = currentSnapshot ?: return@setOnClickListener
             requestExport(snapshot.fileName)
@@ -56,7 +63,7 @@ internal class BootstrapSettingsLogsCoordinator(
             setBusyState(false)
 
             result.onSuccess {
-                showMessage(activity.getString(R.string.bootstrap_settings_logs_export_success, snapshot.fileName))
+                showMessage(activity.getString(R.string.bootstrap_settings_logs_export_success, snapshot.displayName))
             }.onFailure {
                 showError(activity.getString(R.string.bootstrap_settings_logs_export_failed))
             }
@@ -87,10 +94,32 @@ internal class BootstrapSettingsLogsCoordinator(
     }
 
     private fun loadLatestLogSnapshot(): HostLogSnapshot? {
-        return HostLogReader.readLatestSnapshot(activity)
+        currentEntries = HostLogReader.listEntries(activity)
+        if (currentEntries.isEmpty()) {
+            selectedLogPath = null
+            return null
+        }
+
+        val selectedEntry = selectedLogPath?.let { path ->
+            currentEntries.firstOrNull { entry -> entry.sourceFile.absolutePath == path }
+        }
+        if (selectedLogPath != null && selectedEntry == null) {
+            selectedLogPath = null
+        }
+
+        return if (selectedEntry != null) {
+            HostLogReader.readSnapshot(activity, selectedEntry.sourceFile, entry = selectedEntry)
+        } else {
+            HostLogReader.readPreferredSnapshot(
+                context = activity,
+                preferTavernServerLog = StartupRuntimeStore.state.value.isReady,
+                entries = currentEntries
+            )
+        }
     }
 
     private fun renderSnapshot() {
+        selectButton.isEnabled = !busy && currentEntries.isNotEmpty()
         exportButton.isEnabled = !busy && currentSnapshot != null
         reloadButton.isEnabled = !busy
         val snapshot = currentSnapshot
@@ -104,8 +133,61 @@ internal class BootstrapSettingsLogsCoordinator(
             return
         }
 
-        metaView.text = activity.getString(R.string.bootstrap_settings_logs_meta, snapshot.fileName, snapshot.updatedAt)
+        metaView.text = activity.getString(R.string.bootstrap_settings_logs_meta, snapshot.displayName, snapshot.updatedAt)
         contentView.text = snapshot.content.ifBlank { activity.getString(R.string.bootstrap_settings_logs_empty_content) }
+    }
+
+    private fun showLogSelectionDialog() {
+        if (busy) {
+            return
+        }
+
+        activity.lifecycleScope.launch {
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    HostLogReader.listEntries(activity)
+                }
+            }
+            setBusyState(false)
+
+            result.onSuccess { entries ->
+                currentEntries = entries
+                if (entries.isEmpty()) {
+                    currentSnapshot = null
+                    renderSnapshot()
+                    showMessage(activity.getString(R.string.bootstrap_settings_logs_empty))
+                    return@onSuccess
+                }
+
+                val optionLabels = buildList {
+                    add(activity.getString(R.string.bootstrap_settings_logs_select_auto))
+                    entries.forEach { entry ->
+                        add(activity.getString(R.string.bootstrap_settings_logs_select_item, entry.displayName, entry.updatedAt))
+                    }
+                }
+                val checkedItem = selectedLogPath?.let { path ->
+                    entries.indexOfFirst { entry -> entry.sourceFile.absolutePath == path }
+                        .takeIf { index -> index >= 0 }
+                        ?.plus(1)
+                } ?: 0
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.bootstrap_settings_logs_select_title)
+                    .setSingleChoiceItems(optionLabels.toTypedArray(), checkedItem) { dialog, which ->
+                        selectedLogPath = if (which == 0) {
+                            null
+                        } else {
+                            entries[which - 1].sourceFile.absolutePath
+                        }
+                        dialog.dismiss()
+                        reloadLatestLog()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_logs_load_failed))
+            }
+        }
     }
 
     private fun setBusyState(value: Boolean) {

@@ -47,6 +47,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -62,6 +64,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import kotlin.math.absoluteValue
 import kotlin.math.abs
 
@@ -124,6 +127,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var floatingLogsEmpty: TextView
     private lateinit var floatingLogsContent: TextView
     private lateinit var floatingLogsScroll: NestedScrollView
+    private lateinit var floatingLogsSelectButton: MaterialButton
+    private lateinit var floatingLogsIntervalButton: MaterialButton
     private lateinit var floatingLogsCloseButton: ImageButton
     private lateinit var backPressCallback: OnBackPressedCallback
     private var webSessionScriptHandler: ScriptHandler? = null
@@ -134,12 +139,17 @@ class MainActivity : AppCompatActivity() {
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var floatingLogsRefreshJob: Job? = null
     private var lastFloatingLogSnapshot: HostLogSnapshot? = null
+    private var floatingLogsAvailableEntries: List<HostLogEntry> = emptyList()
+    private var floatingLogsSelectedLogPath: String? = null
+    private var floatingLogsAutoScrollEnabled = true
     private var floatingLogsBubbleDockSide = FloatingLogsBubbleDockSide.RIGHT
     private val floatingLogsBubbleTouchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
     private val floatingLogsPanelGapPx by lazy { 12f * resources.displayMetrics.density }
     private val floatingLogsBubbleHiddenWidthPx by lazy { floatingLogsBubble.width / 2f }
     private val floatingLogsBubbleRevealInterpolator = OvershootInterpolator(0.9f)
     private val floatingLogsBubbleDockInterpolator = OvershootInterpolator(0.55f)
+
+    private data class FloatingLogsPanelSize(val width: Int, val height: Int)
     private val hostConfigStore by lazy { BootstrapHostConfigStore(this) }
     private lateinit var appUpdateCoordinator: AppUpdateCoordinator
     private val webSessionStoragePreferences by lazy {
@@ -278,10 +288,18 @@ class MainActivity : AppCompatActivity() {
         floatingLogsEmpty = findViewById(R.id.floatingLogsEmpty)
         floatingLogsContent = findViewById(R.id.floatingLogsContent)
         floatingLogsScroll = findViewById(R.id.floatingLogsScroll)
+        floatingLogsSelectButton = findViewById(R.id.floatingLogsSelectButton)
+        floatingLogsIntervalButton = findViewById(R.id.floatingLogsIntervalButton)
         floatingLogsCloseButton = findViewById(R.id.floatingLogsCloseButton)
     }
 
     private fun configureFloatingLogsUi() {
+        val disableAutoScrollTouchListener = View.OnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                floatingLogsAutoScrollEnabled = false
+            }
+            false
+        }
         floatingLogsBubble.setOnTouchListener(object : View.OnTouchListener {
             private var downRawX = 0f
             private var downRawY = 0f
@@ -369,6 +387,25 @@ class MainActivity : AppCompatActivity() {
         floatingLogsCloseButton.setOnClickListener {
             setFloatingLogsPanelVisible(false)
         }
+        floatingLogsPanel.setOnTouchListener(disableAutoScrollTouchListener)
+        floatingLogsScroll.setOnTouchListener(disableAutoScrollTouchListener)
+        floatingLogsContent.setOnTouchListener(disableAutoScrollTouchListener)
+        floatingLogsScroll.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (isFloatingLogsScrolledToBottom()) {
+                floatingLogsAutoScrollEnabled = true
+            }
+        }
+        configureFloatingLogsControlButtons()
+        updateFloatingLogsControlLabels()
+    }
+
+    private fun configureFloatingLogsControlButtons() {
+        floatingLogsSelectButton.setOnClickListener {
+            showFloatingLogsSelectDialog()
+        }
+        floatingLogsIntervalButton.setOnClickListener {
+            showFloatingLogsIntervalDialog()
+        }
     }
 
     private fun refreshFloatingLogsVisibility() {
@@ -391,11 +428,17 @@ class MainActivity : AppCompatActivity() {
         val shouldShow = visible && hostConfigStore.floatingLogBubbleEnabled
         if (shouldShow) {
             revealFloatingLogsBubble(animated = true) {
+                floatingLogsPanel.alpha = 0f
                 floatingLogsPanel.isVisible = true
-                repositionFloatingLogsPanel()
-                startFloatingLogsRefreshLoop()
+                repositionFloatingLogsPanel {
+                    floatingLogsPanel.alpha = 1f
+                    floatingLogsAutoScrollEnabled = true
+                    scrollFloatingLogsToBottom()
+                    startFloatingLogsRefreshLoop()
+                }
             }
         } else {
+            floatingLogsPanel.alpha = 1f
             floatingLogsPanel.isVisible = false
             stopFloatingLogsRefreshLoop()
             dockFloatingLogsBubble(animated = true)
@@ -404,6 +447,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun revealFloatingLogsBubbleAndOpenPanel() {
         setFloatingLogsPanelVisible(true)
+    }
+
+    private fun updateFloatingLogsPanelLayout(): FloatingLogsPanelSize? {
+        if (contentRoot.width <= 0 || contentRoot.height <= 0) {
+            return null
+        }
+
+        val desiredWidth = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_width)
+        val desiredHeight = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_height)
+        val horizontalMargin = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_horizontal_margin)
+        val verticalMargin = resources.getDimensionPixelSize(R.dimen.stai_floating_logs_panel_vertical_margin)
+        val availableWidth = (contentRoot.width - contentRoot.paddingLeft - contentRoot.paddingRight - horizontalMargin).coerceAtLeast(0)
+        val availableHeight = (contentRoot.height - contentRoot.paddingTop - contentRoot.paddingBottom - verticalMargin).coerceAtLeast(0)
+        val targetWidth = desiredWidth.coerceAtMost(availableWidth)
+        val targetHeight = desiredHeight.coerceAtMost(availableHeight)
+        if (targetWidth <= 0 || targetHeight <= 0) {
+            return null
+        }
+        val layoutParams = floatingLogsPanel.layoutParams
+        if (layoutParams.width != targetWidth || layoutParams.height != targetHeight) {
+            layoutParams.width = targetWidth
+            layoutParams.height = targetHeight
+            floatingLogsPanel.layoutParams = layoutParams
+        }
+        return FloatingLogsPanelSize(width = targetWidth, height = targetHeight)
     }
 
     private fun moveFloatingLogsBubbleTo(targetX: Float, targetY: Float) {
@@ -551,25 +619,23 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun repositionFloatingLogsPanel() {
+    private fun repositionFloatingLogsPanel(onPositioned: (() -> Unit)? = null) {
         floatingLogsPanel.post {
             if (!floatingLogsPanel.isVisible || contentRoot.width <= 0 || contentRoot.height <= 0) {
                 return@post
             }
+            val panelSize = updateFloatingLogsPanelLayout() ?: return@post
             if (floatingLogsBubble.width <= 0 || floatingLogsBubble.height <= 0) {
-                return@post
-            }
-            if (floatingLogsPanel.width <= 0 || floatingLogsPanel.height <= 0) {
                 return@post
             }
 
             val minX = contentRoot.paddingLeft.toFloat()
-            val maxX = (contentRoot.width - contentRoot.paddingRight - floatingLogsPanel.width).toFloat().coerceAtLeast(minX)
+            val maxX = (contentRoot.width - contentRoot.paddingRight - panelSize.width).toFloat().coerceAtLeast(minX)
             val minY = contentRoot.paddingTop.toFloat()
-            val maxY = (contentRoot.height - contentRoot.paddingBottom - floatingLogsPanel.height).toFloat().coerceAtLeast(minY)
+            val maxY = (contentRoot.height - contentRoot.paddingBottom - panelSize.height).toFloat().coerceAtLeast(minY)
 
-            val preferredX = floatingLogsBubble.x + (floatingLogsBubble.width - floatingLogsPanel.width) / 2f
-            val preferredAboveY = floatingLogsBubble.y - floatingLogsPanel.height - floatingLogsPanelGapPx
+            val preferredX = floatingLogsBubble.x + (floatingLogsBubble.width - panelSize.width) / 2f
+            val preferredAboveY = floatingLogsBubble.y - panelSize.height - floatingLogsPanelGapPx
             val preferredBelowY = floatingLogsBubble.y + floatingLogsBubble.height + floatingLogsPanelGapPx
             val resolvedY = when {
                 preferredAboveY >= minY -> preferredAboveY
@@ -579,6 +645,7 @@ class MainActivity : AppCompatActivity() {
 
             floatingLogsPanel.x = preferredX.coerceIn(minX, maxX)
             floatingLogsPanel.y = resolvedY.coerceIn(minY, maxY)
+            onPositioned?.invoke()
         }
     }
 
@@ -590,7 +657,7 @@ class MainActivity : AppCompatActivity() {
         floatingLogsRefreshJob = lifecycleScope.launch {
             while (isActive && floatingLogsPanel.isVisible) {
                 renderFloatingLatestLog()
-                delay(1000)
+                delay(hostConfigStore.floatingLogRefreshIntervalMillis.toLong())
             }
         }
     }
@@ -601,10 +668,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun renderFloatingLatestLog() {
-        val snapshot = withContext(Dispatchers.IO) {
-            HostLogReader.readLatestSnapshot(this@MainActivity, maxChars = 200_000)
+        val preferTavernServerLog = StartupRuntimeStore.state.value.isReady
+        val result = withContext(Dispatchers.IO) {
+            val entries = HostLogReader.listEntries(this@MainActivity)
+            val selectedEntry = floatingLogsSelectedLogPath?.let { selectedPath ->
+                entries.firstOrNull { entry -> entry.sourceFile.absolutePath == selectedPath }
+            }
+            val snapshot = when {
+                selectedEntry != null -> HostLogReader.readSnapshot(
+                    context = this@MainActivity,
+                    logFile = selectedEntry.sourceFile,
+                    maxChars = 200_000,
+                    entry = selectedEntry
+                )
+                else -> HostLogReader.readPreferredSnapshot(
+                    context = this@MainActivity,
+                    preferTavernServerLog = preferTavernServerLog,
+                    maxChars = 200_000,
+                    entries = entries
+                )
+            }
+            Triple(entries, selectedEntry, snapshot)
         }
+        val entries = result.first
+        val selectedEntry = result.second
+        val snapshot = result.third
+        floatingLogsAvailableEntries = entries
+        if (floatingLogsSelectedLogPath != null && selectedEntry == null) {
+            floatingLogsSelectedLogPath = null
+        }
+        updateFloatingLogsControlLabels()
+
         if (snapshot == lastFloatingLogSnapshot) {
+            if (floatingLogsAutoScrollEnabled) {
+                scrollFloatingLogsToBottom()
+            }
             return
         }
 
@@ -619,10 +717,128 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        floatingLogsMeta.text = getString(R.string.bootstrap_settings_logs_meta, snapshot.fileName, snapshot.updatedAt)
+        floatingLogsMeta.text = getString(R.string.bootstrap_settings_logs_meta, snapshot.displayName, snapshot.updatedAt)
         floatingLogsContent.text = snapshot.content.ifBlank { getString(R.string.bootstrap_settings_logs_empty_content) }
-        floatingLogsScroll.post {
-            floatingLogsScroll.fullScroll(View.FOCUS_DOWN)
+        if (floatingLogsAutoScrollEnabled) {
+            scrollFloatingLogsToBottom()
+        }
+    }
+
+    private fun scrollFloatingLogsToBottom() {
+        floatingLogsContent.post {
+            if (!floatingLogsPanel.isVisible) {
+                return@post
+            }
+
+            val visibleHeight = floatingLogsScroll.height - floatingLogsScroll.paddingTop - floatingLogsScroll.paddingBottom
+            if (visibleHeight <= 0) {
+                return@post
+            }
+
+            val layoutBottom = floatingLogsContent.layout?.let { layout ->
+                if (floatingLogsContent.lineCount > 0) {
+                    layout.getLineBottom(floatingLogsContent.lineCount - 1)
+                } else {
+                    floatingLogsContent.height
+                }
+            } ?: floatingLogsContent.height
+            val targetScrollY = (layoutBottom + floatingLogsContent.paddingBottom - visibleHeight).coerceAtLeast(0)
+            floatingLogsScroll.scrollTo(0, targetScrollY)
+        }
+    }
+
+    private fun isFloatingLogsScrolledToBottom(): Boolean {
+        val contentView = floatingLogsScroll.getChildAt(0) ?: return true
+        val remainingScroll = contentView.bottom - (floatingLogsScroll.height + floatingLogsScroll.scrollY)
+        val tolerancePx = (8 * resources.displayMetrics.density).toInt()
+        return remainingScroll <= tolerancePx
+    }
+
+    private fun refreshFloatingLogsNow(resetAutoScroll: Boolean = false) {
+        if (resetAutoScroll) {
+            floatingLogsAutoScrollEnabled = true
+        }
+        lifecycleScope.launch {
+            renderFloatingLatestLog()
+        }
+    }
+
+    private fun updateFloatingLogsControlLabels() {
+        val selectedLogLabel = floatingLogsSelectedLogPath?.let { selectedPath ->
+            floatingLogsAvailableEntries.firstOrNull { entry -> entry.sourceFile.absolutePath == selectedPath }?.displayName
+        } ?: getString(R.string.floating_logs_panel_auto_select_label)
+
+        floatingLogsSelectButton.text = selectedLogLabel
+        floatingLogsSelectButton.isEnabled = floatingLogsAvailableEntries.isNotEmpty()
+        floatingLogsIntervalButton.text = floatingLogsRefreshIntervalLabel(hostConfigStore.floatingLogRefreshIntervalMillis)
+        floatingLogsIntervalButton.isEnabled = true
+    }
+
+    private fun showFloatingLogsSelectDialog() {
+        if (floatingLogsAvailableEntries.isEmpty()) {
+            return
+        }
+
+        val optionLabels = buildList {
+            add(getString(R.string.floating_logs_panel_auto_select_label))
+            floatingLogsAvailableEntries.forEach { entry ->
+                add(entry.displayName)
+            }
+        }
+        val checkedItem = floatingLogsSelectedLogPath?.let { selectedPath ->
+            floatingLogsAvailableEntries.indexOfFirst { entry -> entry.sourceFile.absolutePath == selectedPath }
+                .takeIf { index -> index >= 0 }
+                ?.plus(1)
+        } ?: 0
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.floating_logs_panel_select_label)
+            .setSingleChoiceItems(optionLabels.toTypedArray(), checkedItem) { dialog, which ->
+                val selectedPath = if (which == 0) {
+                    null
+                } else {
+                    floatingLogsAvailableEntries.getOrNull(which - 1)?.sourceFile?.absolutePath
+                }
+                if (floatingLogsSelectedLogPath != selectedPath) {
+                    floatingLogsSelectedLogPath = selectedPath
+                    updateFloatingLogsControlLabels()
+                    refreshFloatingLogsNow(resetAutoScroll = true)
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showFloatingLogsIntervalDialog() {
+        val intervalOptions = BootstrapHostConfigStore.floatingLogRefreshIntervalOptions
+        val optionLabels = intervalOptions.map(::floatingLogsRefreshIntervalLabel)
+        val checkedItem = intervalOptions.indexOf(hostConfigStore.floatingLogRefreshIntervalMillis).coerceAtLeast(0)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.floating_logs_panel_interval_label)
+            .setSingleChoiceItems(optionLabels.toTypedArray(), checkedItem) { dialog, which ->
+                val interval = intervalOptions.getOrNull(which) ?: return@setSingleChoiceItems
+                if (hostConfigStore.floatingLogRefreshIntervalMillis != interval) {
+                    hostConfigStore.floatingLogRefreshIntervalMillis = interval
+                    updateFloatingLogsControlLabels()
+                    if (floatingLogsPanel.isVisible) {
+                        stopFloatingLogsRefreshLoop()
+                        startFloatingLogsRefreshLoop()
+                    }
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun floatingLogsRefreshIntervalLabel(intervalMillis: Int): String {
+        return when (intervalMillis) {
+            BootstrapHostConfigStore.floatingLogRefreshIntervalRealtimeMillis -> getString(R.string.bootstrap_settings_host_floating_logs_refresh_interval_realtime)
+            BootstrapHostConfigStore.floatingLogRefreshIntervalThreeSecondsMillis -> getString(R.string.bootstrap_settings_host_floating_logs_refresh_interval_three_seconds)
+            BootstrapHostConfigStore.floatingLogRefreshIntervalFiveSecondsMillis -> getString(R.string.bootstrap_settings_host_floating_logs_refresh_interval_five_seconds)
+            else -> getString(R.string.bootstrap_settings_host_floating_logs_refresh_interval_one_second)
         }
     }
 
@@ -1574,10 +1790,63 @@ class MainActivity : AppCompatActivity() {
 
         if (state.isReady) {
             showWebView(state.localUrl)
+            maybePromptDefaultExtensionsAfterBootstrapReady()
         } else {
             bootstrapOverlay.isVisible = true
             webView.isVisible = false
         }
+    }
+
+    private fun maybePromptDefaultExtensionsAfterBootstrapReady() {
+        if (hostConfigStore.defaultExtensionsPromptConsumed) {
+            return
+        }
+
+        hostConfigStore.defaultExtensionsPromptConsumed = true
+        val repositoryCount = loadDefaultExtensionRepositoryCount()
+        if (repositoryCount <= 0) {
+            return
+        }
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.bootstrap_settings_extensions_default_prompt_title)
+            .setMessage(getString(R.string.bootstrap_settings_extensions_default_prompt_message, repositoryCount))
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_install) { _, _ ->
+                openBootstrapSettings(openDefaultExtensionsInstaller = true)
+            }
+            .show()
+    }
+
+    private fun loadDefaultExtensionRepositoryCount(): Int {
+        val paths = HostPaths.from(this)
+        val packagedConfigFile = File(paths.bootstrapRoot, "default-extensions/stai-build-config.json")
+        val bundledLegacyConfigFile = File(paths.bootstrapRoot, "bundled-extensions/stai-build-config.json")
+        val serverLegacyConfigFile = File(paths.bootstrapRoot, "server/bundled-extensions/stai-build-config.json")
+        val legacyRepositoriesFile = File(paths.bootstrapRoot, "default-extensions/default-extension-repositories.json")
+        val bundledLegacyRepositoriesFile = File(paths.bootstrapRoot, "bundled-extensions/default-extension-repositories.json")
+        val serverLegacyRepositoriesFile = File(paths.bootstrapRoot, "server/bundled-extensions/default-extension-repositories.json")
+        val repositoriesFile = when {
+            packagedConfigFile.isFile -> packagedConfigFile
+            bundledLegacyConfigFile.isFile -> bundledLegacyConfigFile
+            serverLegacyConfigFile.isFile -> serverLegacyConfigFile
+            legacyRepositoriesFile.isFile -> legacyRepositoriesFile
+            bundledLegacyRepositoriesFile.isFile -> bundledLegacyRepositoriesFile
+            serverLegacyRepositoriesFile.isFile -> serverLegacyRepositoriesFile
+            else -> return 0
+        }
+
+        return runCatching {
+            val root = JSONObject(repositoriesFile.readText())
+            val repositories = root.optJSONArray("defaultExtensionRepositories")
+                ?: root.optJSONArray("repositories")
+                ?: return@runCatching 0
+            (0 until repositories.length()).count { index ->
+                val repository = repositories.optJSONObject(index) ?: return@count false
+                repository.optString("displayName").trim().isNotBlank() &&
+                    repository.optString("repositoryUrl").trim().isNotBlank()
+            }
+        }.getOrDefault(0)
     }
 
     private fun showWebView(baseUrl: String) {
@@ -1611,14 +1880,20 @@ class MainActivity : AppCompatActivity() {
         webView.reload()
     }
 
-    private fun openBootstrapSettings() {
+    private fun openBootstrapSettings(openDefaultExtensionsInstaller: Boolean = false) {
         if (isOpeningBootstrapSettings) {
             return
         }
 
         isOpeningBootstrapSettings = true
         bootstrapSettingsButton.isEnabled = false
-        bootstrapSettingsLauncher.launch(BootstrapSettingsActivity.createIntent(this))
+        bootstrapSettingsLauncher.launch(
+            BootstrapSettingsActivity.createIntent(
+                activity = this,
+                openExtensionsTab = openDefaultExtensionsInstaller,
+                openDefaultExtensionsInstaller = openDefaultExtensionsInstaller
+            )
+        )
     }
 
     private fun isCurrentWebViewPageFor(baseUrl: String): Boolean {

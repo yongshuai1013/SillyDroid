@@ -1,5 +1,32 @@
 import org.gradle.api.GradleException
+import org.gradle.api.tasks.Sync
 import java.util.Properties
+
+fun resolvePackagedBuildConfigFile() = sequenceOf(
+    rootProject.file("stai-build-config.json"),
+    rootProject.file("../stai-build-config.json")
+).firstOrNull { candidate -> candidate.isFile }
+
+val packagedBootstrapAssetsDir = layout.buildDirectory.dir("generated/stai-bootstrap-assets")
+val packagedBootstrapAssetsDirFile = packagedBootstrapAssetsDir.get().asFile
+val packagedBuildConfigFile = resolvePackagedBuildConfigFile()
+val bundledExtensionsSourceDir = rootProject.file("extensions")
+val syncBootstrapExtensionAssets by tasks.registering(Sync::class) {
+    into(packagedBootstrapAssetsDir)
+
+    if (bundledExtensionsSourceDir.isDirectory) {
+        from(bundledExtensionsSourceDir) {
+            into("bootstrap/bundled-extensions")
+        }
+    }
+
+    if (packagedBuildConfigFile != null) {
+        from(packagedBuildConfigFile) {
+            into("bootstrap/default-extensions")
+            rename { "stai-build-config.json" }
+        }
+    }
+}
 
 plugins {
     id("com.android.application")
@@ -189,6 +216,8 @@ android {
         noCompress += listOf("zip")
     }
 
+    sourceSets.getByName("main").assets.srcDir(packagedBootstrapAssetsDirFile)
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -198,6 +227,10 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncBootstrapExtensionAssets)
 }
 
 dependencies {

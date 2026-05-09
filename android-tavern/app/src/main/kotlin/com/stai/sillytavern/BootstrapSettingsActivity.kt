@@ -32,9 +32,17 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     companion object {
         private const val resultShouldStartKey = "bootstrap-settings.result.start"
         private const val resultShouldReloadTavernUiKey = "bootstrap-settings.result.reload-tavern-ui"
+        private const val openExtensionsTabKey = "bootstrap-settings.open-extensions-tab"
+        private const val openDefaultExtensionsInstallerKey = "bootstrap-settings.open-default-extensions-installer"
 
-        fun createIntent(activity: Activity): Intent {
+        fun createIntent(
+            activity: Activity,
+            openExtensionsTab: Boolean = false,
+            openDefaultExtensionsInstaller: Boolean = false
+        ): Intent {
             return Intent(activity, BootstrapSettingsActivity::class.java)
+                .putExtra(openExtensionsTabKey, openExtensionsTab)
+                .putExtra(openDefaultExtensionsInstallerKey, openDefaultExtensionsInstaller)
         }
 
         fun shouldStartBootstrap(data: Intent?): Boolean {
@@ -47,6 +55,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     }
 
     private lateinit var toolbar: MaterialToolbar
+    private lateinit var toolbarTitleView: TextView
     private lateinit var tabLayout: TabLayout
     private lateinit var rootView: View
     private lateinit var topShellView: View
@@ -69,6 +78,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var logsMetaView: TextView
     private lateinit var logsEmptyView: TextView
     private lateinit var logsContentView: TextView
+    private lateinit var logsSelectButton: MaterialButton
     private lateinit var logsExportButton: MaterialButton
     private lateinit var logsReloadButton: MaterialButton
     private lateinit var settingsPanelView: View
@@ -137,7 +147,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         appUpdateCoordinator.initialize()
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.title = getString(R.string.bootstrap_settings_title)
+        supportActionBar?.setDisplayShowTitleEnabled(false)
+        toolbarTitleView.text = getString(R.string.bootstrap_settings_title)
         toolbar.setNavigationOnClickListener {
             settingsCoordinator.attemptFinish()
         }
@@ -184,6 +195,15 @@ class BootstrapSettingsActivity : AppCompatActivity() {
 
         screenController.setBusy(true)
         settingsCoordinator.loadConfiguration()
+
+        if (intent.getBooleanExtra(openExtensionsTabKey, false) || intent.getBooleanExtra(openDefaultExtensionsInstallerKey, false)) {
+            tabLayout.post {
+                tabLayout.getTabAt(1)?.select()
+                if (intent.getBooleanExtra(openDefaultExtensionsInstallerKey, false)) {
+                    extensionsCoordinator.promptDefaultRepositoriesSelection()
+                }
+            }
+        }
     }
 
     override fun onStart() {
@@ -214,6 +234,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         rootView = findViewById(R.id.bootstrapSettingsRoot)
         topShellView = findViewById(R.id.bootstrapSettingsTopShell)
         toolbar = findViewById(R.id.bootstrapSettingsToolbar)
+        toolbarTitleView = findViewById(R.id.bootstrapSettingsToolbarTitle)
         tabLayout = findViewById(R.id.bootstrapSettingsTabs)
         scrollView = findViewById(R.id.bootstrapSettingsScrollView)
         actionBarView = findViewById(R.id.bootstrapSettingsActionBar)
@@ -234,6 +255,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         logsMetaView = findViewById(R.id.bootstrapSettingsLogsMeta)
         logsEmptyView = findViewById(R.id.bootstrapSettingsLogsEmpty)
         logsContentView = findViewById(R.id.bootstrapSettingsLogsContent)
+        logsSelectButton = findViewById(R.id.bootstrapSettingsLogsSelectButton)
         logsExportButton = findViewById(R.id.bootstrapSettingsLogsExportButton)
         logsReloadButton = findViewById(R.id.bootstrapSettingsLogsReloadButton)
         settingsPanelView = findViewById(R.id.bootstrapSettingsSettingsPanel)
@@ -276,7 +298,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             saveStartButton = saveStartButton,
             onTabChanged = { index ->
                 if (this::extensionsCoordinator.isInitialized && index == 1) {
-                    extensionsCoordinator.reloadExtensions(promptDefaultInstall = true)
+                    extensionsCoordinator.reloadExtensions()
                 } else if (this::logsCoordinator.isInitialized && index == 2) {
                     logsCoordinator.reloadLatestLog()
                 }
@@ -351,6 +373,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             metaView = logsMetaView,
             emptyView = logsEmptyView,
             contentView = logsContentView,
+            selectButton = logsSelectButton,
             exportButton = logsExportButton,
             reloadButton = logsReloadButton,
             setBusy = screenController::setBusy,

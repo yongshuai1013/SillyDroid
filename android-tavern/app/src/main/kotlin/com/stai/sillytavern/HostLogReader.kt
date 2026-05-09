@@ -10,8 +10,17 @@ import java.util.Locale
 internal data class HostLogSnapshot(
     val sourceFile: File,
     val fileName: String,
+    val displayName: String,
     val updatedAt: String,
     val content: String
+)
+
+internal data class HostLogEntry(
+    val sourceFile: File,
+    val fileName: String,
+    val displayName: String,
+    val updatedAt: String,
+    val lastModified: Long
 )
 
 internal object HostLogReader {
@@ -19,34 +28,102 @@ internal object HostLogReader {
     private const val defaultMaxBytes = 768 * 1024
     private const val defaultMaxLines = 6_000
 
-    fun readLatestSnapshot(
-        context: Context,
-        maxChars: Int = defaultMaxChars,
-        maxBytes: Int = defaultMaxBytes,
-        maxLines: Int = defaultMaxLines
-    ): HostLogSnapshot? {
+    fun listEntries(context: Context): List<HostLogEntry> {
         val paths = HostPaths.from(context)
         paths.ensureWorkingDirectories()
-        val latestLog = paths.logsDir.listFiles()
+        return paths.logsDir.listFiles()
             .orEmpty()
             .filter { file -> file.isFile && file.extension.equals("log", ignoreCase = true) }
-            .maxByOrNull(File::lastModified)
+            .sortedByDescending(File::lastModified)
+            .map { file ->
+                HostLogEntry(
+                    sourceFile = file,
+                    fileName = file.name,
+                    displayName = resolveDisplayName(context, file.name),
+                    updatedAt = formatTimestamp(file.lastModified()),
+                    lastModified = file.lastModified()
+                )
+            }
+    }
+
+    fun readPreferredSnapshot(
+        context: Context,
+        preferTavernServerLog: Boolean,
+        maxChars: Int = defaultMaxChars,
+        maxBytes: Int = defaultMaxBytes,
+        maxLines: Int = defaultMaxLines,
+        entries: List<HostLogEntry>? = null
+    ): HostLogSnapshot? {
+        val availableEntries = entries ?: listEntries(context)
+        val selectedEntry = when {
+            availableEntries.isEmpty() -> null
+            preferTavernServerLog -> availableEntries.firstOrNull { entry ->
+                entry.fileName.equals("sillytavern-server.log", ignoreCase = true)
+            } ?: availableEntries.first()
+            else -> availableEntries.first()
+        }
             ?: return null
 
+        return readSnapshot(
+            context = context,
+            logFile = selectedEntry.sourceFile,
+            maxChars = maxChars,
+            maxBytes = maxBytes,
+            maxLines = maxLines,
+            entry = selectedEntry
+        )
+    }
+
+    fun readSnapshot(
+        context: Context,
+        logFile: File,
+        maxChars: Int = defaultMaxChars,
+        maxBytes: Int = defaultMaxBytes,
+        maxLines: Int = defaultMaxLines,
+        entry: HostLogEntry? = null
+    ): HostLogSnapshot? {
+        if (!logFile.isFile || !logFile.extension.equals("log", ignoreCase = true)) {
+            return null
+        }
+
+        val resolvedEntry = entry ?: HostLogEntry(
+            sourceFile = logFile,
+            fileName = logFile.name,
+            displayName = resolveDisplayName(context, logFile.name),
+            updatedAt = formatTimestamp(logFile.lastModified()),
+            lastModified = logFile.lastModified()
+        )
         val content = readTailContent(
             context = context,
-            logFile = latestLog,
+            logFile = logFile,
             maxChars = maxChars,
             maxBytes = maxBytes,
             maxLines = maxLines
         )
 
         return HostLogSnapshot(
-            sourceFile = latestLog,
-            fileName = latestLog.name,
-            updatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(latestLog.lastModified())),
+            sourceFile = resolvedEntry.sourceFile,
+            fileName = resolvedEntry.fileName,
+            displayName = resolvedEntry.displayName,
+            updatedAt = resolvedEntry.updatedAt,
             content = content
         )
+    }
+
+    private fun formatTimestamp(lastModified: Long): String {
+        return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(lastModified))
+    }
+
+    private fun resolveDisplayName(context: Context, fileName: String): String {
+        val normalizedName = fileName.lowercase(Locale.ROOT)
+        return when {
+            normalizedName == "sillytavern-server.log" -> context.getString(R.string.bootstrap_settings_logs_name_tavern_server)
+            normalizedName == "startup.log" -> context.getString(R.string.bootstrap_settings_logs_name_startup)
+            normalizedName.startsWith("extension-install-preview-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_preview)
+            normalizedName.startsWith("extension-reinstall-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_reinstall)
+            normalizedName.startsWith("extension-") -> context.getString(R.string.bootstrap_settings_logs_name_extension_runtime)
+            else -> context.getString(R.string.bootstrap_settings_logs_name_other)
+        }
     }
 
     private fun readTailContent(
