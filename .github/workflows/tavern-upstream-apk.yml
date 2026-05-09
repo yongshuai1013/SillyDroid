@@ -30,7 +30,7 @@ on:
           - debug
           - release
       force_rebuild:
-        description: 即使当前仓库已存在同 tag 产物也强制重打
+        description: 强制重建 rootfs / dependency / server / apk
         required: false
         default: false
         type: boolean
@@ -53,957 +53,542 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  resolve:
+  plan:
     runs-on: ubuntu-latest
     outputs:
       tavern_tag: ${{ steps.plan.outputs.tavern_tag }}
-      host_version: ${{ steps.plan.outputs.host_version }}
       safe_tag: ${{ steps.plan.outputs.safe_tag }}
       build_type: ${{ steps.plan.outputs.build_type }}
-      force_rebuild: ${{ steps.plan.outputs.force_rebuild }}
-      publish_release: ${{ steps.plan.outputs.publish_release }}
-      runtime_changed: ${{ steps.plan.outputs.runtime_changed }}
-      payload_changed: ${{ steps.plan.outputs.payload_changed }}
-      server_changed: ${{ steps.plan.outputs.server_changed }}
-      should_build: ${{ steps.plan.outputs.should_build }}
-      release_tag: ${{ steps.plan.outputs.release_tag }}
-      release_title: ${{ steps.plan.outputs.release_title }}
-      release_prerelease: ${{ steps.plan.outputs.release_prerelease }}
-      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      host_version_base: ${{ steps.plan.outputs.host_version_base }}
+      host_version: ${{ steps.plan.outputs.host_version }}
+      repo_revision_count: ${{ steps.plan.outputs.repo_revision_count }}
+      upstream_release_index: ${{ steps.plan.outputs.upstream_release_index }}
       version_name: ${{ steps.plan.outputs.version_name }}
       version_code: ${{ steps.plan.outputs.version_code }}
-      runtime_release_tag: ${{ steps.plan.outputs.runtime_release_tag }}
-      runtime_release_title: ${{ steps.plan.outputs.runtime_release_title }}
-      runtime_asset_name: ${{ steps.plan.outputs.runtime_asset_name }}
-      runtime_metadata_name: ${{ steps.plan.outputs.runtime_metadata_name }}
+      rootfs_changed: ${{ steps.plan.outputs.rootfs_changed }}
+      dependency_changed: ${{ steps.plan.outputs.dependency_changed }}
+      server_changed: ${{ steps.plan.outputs.server_changed }}
+      apk_changed: ${{ steps.plan.outputs.apk_changed }}
+      force_rebuild: ${{ steps.plan.outputs.force_rebuild }}
+      publish_release: ${{ steps.plan.outputs.publish_release }}
+      rootfs_release_tag: ${{ steps.plan.outputs.rootfs_release_tag }}
+      rootfs_release_title: ${{ steps.plan.outputs.rootfs_release_title }}
+      rootfs_asset_name: ${{ steps.plan.outputs.rootfs_asset_name }}
+      rootfs_metadata_name: ${{ steps.plan.outputs.rootfs_metadata_name }}
+      dependency_release_tag: ${{ steps.plan.outputs.dependency_release_tag }}
+      dependency_release_title: ${{ steps.plan.outputs.dependency_release_title }}
+      dependency_index_name: ${{ steps.plan.outputs.dependency_index_name }}
       server_release_tag: ${{ steps.plan.outputs.server_release_tag }}
       server_release_title: ${{ steps.plan.outputs.server_release_title }}
       server_asset_name: ${{ steps.plan.outputs.server_asset_name }}
       server_manifest_name: ${{ steps.plan.outputs.server_manifest_name }}
-      dependency_release_tag: ${{ steps.plan.outputs.dependency_release_tag }}
-      dependency_release_title: ${{ steps.plan.outputs.dependency_release_title }}
-      dependency_index_name: ${{ steps.plan.outputs.dependency_index_name }}
-    env:
-      GH_TOKEN: ${{ github.token }}
+      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      release_title: ${{ steps.plan.outputs.release_title }}
+      release_prerelease: ${{ steps.plan.outputs.release_prerelease }}
+      rootfs_release_dir: ${{ steps.plan.outputs.rootfs_release_dir }}
+      dependency_release_dir: ${{ steps.plan.outputs.dependency_release_dir }}
+      server_release_dir: ${{ steps.plan.outputs.server_release_dir }}
+      apk_release_dir: ${{ steps.plan.outputs.apk_release_dir }}
     steps:
-      - name: Checkout version metadata
+      - name: Checkout build metadata
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           sparse-checkout: |
             android-tavern/gradle.properties
             scripts/read-stai-build-config.py
+            scripts/resolve-tavern-build-plan.sh
             stai-build-config.json
 
-      - name: Resolve upstream release and build plan
+      - name: Resolve build plan
         id: plan
         env:
-          UPSTREAM_REPO: SillyTavern/SillyTavern
           REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tavern_tag || 'auto' }}
           REQUESTED_BUILD_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type || 'auto' }}
           FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || 'false' }}
           PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'true' }}
+          COMPARE_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+          COMPARE_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          read_build_config_value() {
-            local key_path="$1"
-            local default_value="$2"
+          bash ./scripts/resolve-tavern-build-plan.sh \
+            --tavern-tag "$REQUESTED_TAG" \
+            --build-type "$REQUESTED_BUILD_TYPE" \
+            --compare-base "$COMPARE_BASE" \
+            --compare-head "$COMPARE_HEAD" >> "$GITHUB_OUTPUT"
 
-            python3 ./scripts/read-stai-build-config.py stai-build-config.json "$key_path" "$default_value"
-          }
+          printf 'force_rebuild=%s\n' "$FORCE_REBUILD" >> "$GITHUB_OUTPUT"
+          printf 'publish_release=%s\n' "$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
 
-          config_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')"
-          config_build_type="$(read_build_config_value 'build.buildType' 'release')"
-
-          build_type="$REQUESTED_BUILD_TYPE"
-          force_rebuild="$FORCE_REBUILD"
-          publish_release="$PUBLISH_RELEASE"
-          tavern_tag="$REQUESTED_TAG"
-
-          if [ -z "$build_type" ] || [ "$build_type" = 'auto' ]; then
-            build_type="$config_build_type"
-          fi
-
-          if [ -z "$build_type" ] || [ "$build_type" = 'auto' ]; then
-            build_type='release'
-          fi
-
-          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'auto' ]; then
-            tavern_tag="$config_tavern_tag"
-          fi
-
-          case "$build_type" in
-            debug|release)
-              ;;
-            *)
-              echo "Unsupported build_type: $build_type" >&2
-              exit 1
-              ;;
-          esac
-
-          case "$force_rebuild" in
-            true|false)
-              ;;
-            *)
-              echo "Unsupported force_rebuild: $force_rebuild" >&2
-              exit 1
-              ;;
-          esac
-
-          case "$publish_release" in
-            true|false)
-              ;;
-            *)
-              echo "Unsupported publish_release: $publish_release" >&2
-              exit 1
-              ;;
-          esac
-
-          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'auto' ] || [ "$tavern_tag" = 'latest' ]; then
-            tavern_tag="$(gh api "/repos/$UPSTREAM_REPO/releases/latest" --jq '.tag_name')"
-          fi
-
-          if [ -z "$tavern_tag" ] || [ "$tavern_tag" = 'null' ]; then
-            echo '无法解析上游 SillyTavern release tag。' >&2
-            exit 1
-          fi
-
-          normalized_tag="${tavern_tag#refs/tags/}"
-
-          runtime_changed='false'
-          payload_changed='false'
-          server_changed='false'
-          if [ '${{ github.event_name }}' = 'push' ]; then
-            compare_base='${{ github.event.before }}'
-            compare_head='${{ github.sha }}'
-            changed_files=''
-
-            if [ -n "$compare_base" ] && [ "$compare_base" != '0000000000000000000000000000000000000000' ]; then
-              changed_files="$(gh api "/repos/${{ github.repository }}/compare/$compare_base...$compare_head" --jq '.files[].filename')"
-            else
-              changed_files="$(gh api "/repos/${{ github.repository }}/commits/$compare_head" --jq '.files[].filename')"
-            fi
-
-            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|build-tavern-android-runtime-image\.sh|sync-android-rootfs\.sh)|android-tavern/app/src/main/assets/bootstrap/scripts/)' > /dev/null 2>&1; then
-              runtime_changed='true'
-            fi
-
-            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|stai-build-config\.json)' > /dev/null 2>&1; then
-              payload_changed='true'
-            fi
-
-            if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|android-tavern/server-overlay/)' > /dev/null 2>&1; then
-              server_changed='true'
-            fi
-          fi
-
-          host_version_base="$(sed -n 's/^staiAndroidHostVersion=//p' android-tavern/gradle.properties | head -n 1 | tr -d '\r' | tr -d '[:space:]')"
-          if [ -z "$host_version_base" ]; then
-            echo '无法解析 Android 宿主版本基线；请检查 android-tavern/gradle.properties 中的 staiAndroidHostVersion。' >&2
-            exit 1
-          fi
-
-          if ! printf '%s' "$host_version_base" | grep -E '^[0-9]+(\.[0-9]+)*$' > /dev/null 2>&1; then
-            echo "Android 宿主版本基线格式非法：$host_version_base" >&2
-            exit 1
-          fi
-
-          repo_revision_count="$(git rev-list --count HEAD | tr -d '\r')"
-          if ! printf '%s' "$repo_revision_count" | grep -E '^[0-9]+$' > /dev/null 2>&1; then
-            echo "无法解析当前仓库提交计数：$repo_revision_count" >&2
-            exit 1
-          fi
-
-          upstream_release_index='0'
-          total_upstream_releases='0'
-          matched_upstream_release_position='0'
-          while IFS= read -r upstream_release_tag; do
-            upstream_release_tag="${upstream_release_tag#refs/tags/}"
-            if [ -z "$upstream_release_tag" ]; then
-              continue
-            fi
-
-            total_upstream_releases="$((total_upstream_releases + 1))"
-            if [ "$matched_upstream_release_position" = '0' ] && [ "$upstream_release_tag" = "$normalized_tag" ]; then
-              matched_upstream_release_position="$total_upstream_releases"
-            fi
-          done < <(gh api --paginate "/repos/$UPSTREAM_REPO/releases?per_page=100" --jq '.[].tag_name')
-
-          if [ "$matched_upstream_release_position" != '0' ]; then
-            upstream_release_index="$((total_upstream_releases - matched_upstream_release_position + 1))"
-          fi
-
-          host_version="${host_version_base}.${repo_revision_count}"
-          safe_host_version="$(printf '%s' "$host_version" | sed 's#[^0-9A-Za-z._-]#-#g')"
-          safe_tag="$(printf '%s' "$normalized_tag" | sed 's#[^0-9A-Za-z._-]#-#g')"
-          artifact_name="stai-sillytavern-android-v${safe_host_version}-${safe_tag}-${build_type}"
-          release_tag="stai-sillytavern-v${safe_host_version}-${safe_tag}-${build_type}"
-          release_title="ST.AI SillyTavern Android v${host_version} / Tavern ${normalized_tag} ${build_type}"
-          release_prerelease='true'
-          if [ "$build_type" = 'release' ]; then
-            release_prerelease='false'
-          fi
-
-          should_build='true'
-          if [ '${{ github.event_name }}' != 'push' ] && [ "$publish_release" = 'true' ] && [ "$force_rebuild" != 'true' ] && [ "$runtime_changed" != 'true' ] && [ "$payload_changed" != 'true' ]; then
-            if gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
-              if gh api "/repos/${{ github.repository }}/releases/tags/$release_tag" --jq '.assets[].name' 2>/dev/null | grep -Fx "${artifact_name}.apk" > /dev/null 2>&1; then
-                should_build='false'
-              fi
-            fi
-          fi
-
-          version_name="${host_version}+tavern.${normalized_tag}"
-          version_code_base='1800000000'
-          version_code_stride='1000'
-          version_code="$((version_code_base + repo_revision_count * version_code_stride + upstream_release_index))"
-          if [ "$version_code" -le 0 ] || [ "$version_code" -gt 2147483647 ]; then
-            echo "生成的 Android versionCode 超出有效范围：$version_code" >&2
-            exit 1
-          fi
-
-          runtime_release_tag='tavern-runtime-linux-arm64'
-          runtime_release_title='Tavern Android runtime linux-arm64'
-          runtime_asset_name='tavern-android-runtime-linux-arm64.zip'
-          runtime_metadata_name='tavern-android-runtime-linux-arm64.metadata.json'
-          server_release_tag="tavern-server-core-linux-arm64-${safe_tag}"
-          server_release_title="Tavern Android server core ${normalized_tag} linux-arm64"
-          server_asset_name='server-core.zip'
-          server_manifest_name='server-core-manifest.json'
-          dependency_release_tag='tavern-dependency-packs-linux-arm64'
-          dependency_release_title='Tavern Android dependency packs linux-arm64'
-          dependency_index_name='component-index.json'
-
-          {
-            printf 'tavern_tag=%s\n' "$normalized_tag"
-            printf 'host_version=%s\n' "$host_version"
-            printf 'safe_tag=%s\n' "$safe_tag"
-            printf 'build_type=%s\n' "$build_type"
-            printf 'force_rebuild=%s\n' "$force_rebuild"
-            printf 'publish_release=%s\n' "$publish_release"
-            printf 'runtime_changed=%s\n' "$runtime_changed"
-            printf 'payload_changed=%s\n' "$payload_changed"
-            printf 'server_changed=%s\n' "$server_changed"
-            printf 'should_build=%s\n' "$should_build"
-            printf 'release_tag=%s\n' "$release_tag"
-            printf 'release_title=%s\n' "$release_title"
-            printf 'release_prerelease=%s\n' "$release_prerelease"
-            printf 'artifact_name=%s\n' "$artifact_name"
-            printf 'version_name=%s\n' "$version_name"
-            printf 'version_code=%s\n' "$version_code"
-            printf 'runtime_release_tag=%s\n' "$runtime_release_tag"
-            printf 'runtime_release_title=%s\n' "$runtime_release_title"
-            printf 'runtime_asset_name=%s\n' "$runtime_asset_name"
-            printf 'runtime_metadata_name=%s\n' "$runtime_metadata_name"
-            printf 'server_release_tag=%s\n' "$server_release_tag"
-            printf 'server_release_title=%s\n' "$server_release_title"
-            printf 'server_asset_name=%s\n' "$server_asset_name"
-            printf 'server_manifest_name=%s\n' "$server_manifest_name"
-            printf 'dependency_release_tag=%s\n' "$dependency_release_tag"
-            printf 'dependency_release_title=%s\n' "$dependency_release_title"
-            printf 'dependency_index_name=%s\n' "$dependency_index_name"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Append skip summary
-        if: steps.plan.outputs.should_build != 'true'
+      - name: Append plan summary
         run: |
           {
-            echo '### Tavern upstream APK'
+            echo '### Tavern upstream APK plan'
             echo
-            echo '- Status: skipped'
-            echo '- Reason: 当前仓库已存在同 upstream tag 与 build type 的 APK release 资产'
-            echo '- Host version: ${{ steps.plan.outputs.host_version }}'
-            echo '- Upstream tag: ${{ steps.plan.outputs.tavern_tag }}'
+            echo '- Tavern tag: ${{ steps.plan.outputs.tavern_tag }}'
             echo '- Build type: ${{ steps.plan.outputs.build_type }}'
-            echo '- Runtime changed: ${{ steps.plan.outputs.runtime_changed }}'
-            echo '- Payload changed: ${{ steps.plan.outputs.payload_changed }}'
-            echo '- Release tag: ${{ steps.plan.outputs.release_tag }}'
+            echo '- Host version: ${{ steps.plan.outputs.host_version }}'
+            echo '- Force rebuild: ${{ steps.plan.outputs.force_rebuild }}'
+            echo '- Publish release: ${{ steps.plan.outputs.publish_release }}'
+            echo '- Rootfs changed: ${{ steps.plan.outputs.rootfs_changed }}'
+            echo '- Dependency changed: ${{ steps.plan.outputs.dependency_changed }}'
+            echo '- Server changed: ${{ steps.plan.outputs.server_changed }}'
+            echo '- APK changed: ${{ steps.plan.outputs.apk_changed }}'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  runtime_prereq:
-    needs: resolve
-    if: needs.resolve.outputs.should_build == 'true'
+  rootfs_prereq:
+    needs: plan
     runs-on: ubuntu-latest
     outputs:
-      runtime_source: ${{ steps.runtime_prereq.outputs.runtime_source }}
-      runtime_cache_hit: ${{ steps.runtime_status.outputs.runtime_cache_hit }}
-      runtime_bundle_name: ${{ steps.runtime_paths.outputs.runtime_bundle_name }}
+      source: ${{ steps.resolve.outputs.source }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Clean runtime prerequisite workspace artifacts
-        run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/runtime-image"
-
-      - name: Prepare runtime prerequisite paths
-        id: runtime_paths
-        run: |
-          set -euo pipefail
-
-          runtime_asset_dir="$GITHUB_WORKSPACE/artifacts/prerequisites/runtime-image"
-          runtime_bundle_name='tavern-runtime-linux-arm64'
-
-          mkdir -p "$runtime_asset_dir"
-
-          {
-            printf 'runtime_asset_dir=%s\n' "$runtime_asset_dir"
-            printf 'runtime_bundle_name=%s\n' "$runtime_bundle_name"
-            printf 'runtime_image_path=%s\n' "$runtime_asset_dir/${{ needs.resolve.outputs.runtime_asset_name }}"
-            printf 'runtime_metadata_path=%s\n' "$runtime_asset_dir/${{ needs.resolve.outputs.runtime_metadata_name }}"
-            printf 'runtime_sha256_path=%s\n' "$runtime_asset_dir/${{ needs.resolve.outputs.runtime_asset_name }}.sha256"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached runtime prerequisite
-        id: runtime_cache
-        if: needs.resolve.outputs.force_rebuild != 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ steps.runtime_paths.outputs.runtime_image_path }}
-            ${{ steps.runtime_paths.outputs.runtime_metadata_path }}
-          key: tavern-upstream-runtime-prereq-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-android-runtime-image.sh', 'scripts/sync-android-rootfs.sh', 'android-tavern/app/src/main/assets/bootstrap/scripts/**') }}
-
-      - name: Resolve runtime prerequisite
-        id: runtime_prereq
-        run: |
-          set -euo pipefail
-
-          runtime_image_path='${{ steps.runtime_paths.outputs.runtime_image_path }}'
-          runtime_metadata_path='${{ steps.runtime_paths.outputs.runtime_metadata_path }}'
-          runtime_source='cache'
-
-          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.runtime_changed }}' = 'true' ]; then
-            runtime_source='built'
-          elif [ -f "$runtime_image_path" ] && [ -f "$runtime_metadata_path" ]; then
-            runtime_source='cache'
-          else
-            runtime_source='release'
-            rm -f "$runtime_image_path" "$runtime_metadata_path"
-
-            if gh release view '${{ needs.resolve.outputs.runtime_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
-              gh release download '${{ needs.resolve.outputs.runtime_release_tag }}' \
-                --repo '${{ github.repository }}' \
-                --dir '${{ steps.runtime_paths.outputs.runtime_asset_dir }}' \
-                --pattern '${{ needs.resolve.outputs.runtime_asset_name }}' \
-                --pattern '${{ needs.resolve.outputs.runtime_metadata_name }}' \
-                --clobber
-            fi
-
-            if [ ! -f "$runtime_image_path" ] || [ ! -f "$runtime_metadata_path" ]; then
-              runtime_source='built'
-            fi
-          fi
-
-          if [ "$runtime_source" != 'built' ]; then
-            if [ ! -f "$runtime_image_path" ]; then
-              echo "缺少 runtime image 产物：$runtime_image_path" >&2
-              exit 1
-            fi
-
-            if [ ! -f "$runtime_metadata_path" ]; then
-              echo "缺少 runtime image metadata：$runtime_metadata_path" >&2
-              exit 1
-            fi
-          fi
-
-          printf 'runtime_source=%s\n' "$runtime_source" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout runtime packaging sources
-        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+      - name: Checkout rootfs packaging sources
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            android-tavern
+            android-tavern/app/src/main/assets/bootstrap/scripts
             scripts
+            stai-build-config.json
 
-      - name: Restore Tavern runtime build caches
-        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+      - name: Restore rootfs build caches
+        if: needs.plan.outputs.force_rebuild != 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/stai-android-toolchain
             ~/.cache/stai-android-rootfs
-          key: tavern-runtime-image-${{ runner.os }}-linux-arm64-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-android-runtime-image.sh', 'scripts/sync-android-rootfs.sh', 'android-tavern/app/src/main/assets/bootstrap/scripts/**') }}
+          key: tavern-rootfs-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-android-runtime-image.sh', 'scripts/sync-android-rootfs.sh', 'android-tavern/app/src/main/assets/bootstrap/scripts/**', 'stai-build-config.json') }}
           restore-keys: |
-            tavern-runtime-image-${{ runner.os }}-linux-arm64-
+            tavern-rootfs-${{ runner.os }}-
 
-      - name: Install runtime build prerequisites
-        if: steps.runtime_prereq.outputs.runtime_source == 'built'
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip binutils xz-utils
-
-      - name: Build runtime prerequisite
-        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+      - name: Resolve rootfs prerequisite source
+        id: resolve
         run: |
           set -euo pipefail
 
-          runtime_image_path='${{ steps.runtime_paths.outputs.runtime_image_path }}'
-          runtime_metadata_path='${{ steps.runtime_paths.outputs.runtime_metadata_path }}'
+          rootfs_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.rootfs_release_dir }}"
+          rootfs_path="$rootfs_dir/${{ needs.plan.outputs.rootfs_asset_name }}"
+          metadata_path="$rootfs_dir/${{ needs.plan.outputs.rootfs_metadata_name }}"
+          source='built'
 
-          rm -f "$runtime_image_path" "$runtime_metadata_path"
+          mkdir -p "$rootfs_dir"
+
+          if [ '${{ needs.plan.outputs.force_rebuild }}' != 'true' ] && [ '${{ needs.plan.outputs.rootfs_changed }}' != 'true' ]; then
+            if gh release view '${{ needs.plan.outputs.rootfs_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              gh release download '${{ needs.plan.outputs.rootfs_release_tag }}' \
+                --repo '${{ github.repository }}' \
+                --dir "$rootfs_dir" \
+                --pattern '${{ needs.plan.outputs.rootfs_asset_name }}' \
+                --pattern '${{ needs.plan.outputs.rootfs_metadata_name }}' \
+                --clobber || true
+            fi
+
+            if [ -f "$rootfs_path" ] && [ -f "$metadata_path" ]; then
+              source='release'
+            fi
+          fi
+
+          printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+
+      - name: Build rootfs prerequisite
+        if: steps.resolve.outputs.source == 'built'
+        run: |
+          set -euo pipefail
 
           bash ./scripts/build-tavern-android-runtime-image.sh \
             --runtime-rid linux-arm64 \
-            --output "$runtime_image_path" \
-            --artifact-name 'tavern-android-runtime-linux-arm64' \
-            --metadata-out "$runtime_metadata_path"
+            --output "$GITHUB_WORKSPACE/${{ needs.plan.outputs.rootfs_release_dir }}/${{ needs.plan.outputs.rootfs_asset_name }}" \
+            --artifact-name 'tavern-rootfs-linux-arm64' \
+            --metadata-out "$GITHUB_WORKSPACE/${{ needs.plan.outputs.rootfs_release_dir }}/${{ needs.plan.outputs.rootfs_metadata_name }}"
 
-      - name: Finalize runtime prerequisite status
-        id: runtime_status
+      - name: Finalize rootfs prerequisite
         run: |
           set -euo pipefail
 
-          runtime_source='${{ steps.runtime_prereq.outputs.runtime_source }}'
-          runtime_cache_hit='${{ steps.runtime_cache.outputs.cache-hit }}'
-          runtime_image_path='${{ steps.runtime_paths.outputs.runtime_image_path }}'
-          runtime_sha256_path='${{ steps.runtime_paths.outputs.runtime_sha256_path }}'
+          rootfs_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.rootfs_release_dir }}"
+          rootfs_path="$rootfs_dir/${{ needs.plan.outputs.rootfs_asset_name }}"
+          metadata_path="$rootfs_dir/${{ needs.plan.outputs.rootfs_metadata_name }}"
+          sha_path="$rootfs_path.sha256"
 
-          sha256sum "$runtime_image_path" | awk '{print $1}' > "$runtime_sha256_path"
+          test -f "$rootfs_path"
+          test -f "$metadata_path"
+          sha256sum "$rootfs_path" | awk '{print $1}' > "$sha_path"
 
-          if [ "$runtime_source" != 'cache' ] || [ "$runtime_cache_hit" != 'true' ]; then
-            runtime_cache_hit='false'
-          fi
-
-          {
-            printf 'runtime_source=%s\n' "$runtime_source"
-            printf 'runtime_cache_hit=%s\n' "$runtime_cache_hit"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Publish runtime prerequisite release
-        if: steps.runtime_prereq.outputs.runtime_source == 'built'
+      - name: Publish rootfs prerequisite release
+        if: steps.resolve.outputs.source == 'built'
         run: |
           set -euo pipefail
 
-          runtime_image_path='${{ steps.runtime_paths.outputs.runtime_image_path }}'
-          runtime_metadata_path='${{ steps.runtime_paths.outputs.runtime_metadata_path }}'
-          runtime_sha256_path='${{ steps.runtime_paths.outputs.runtime_sha256_path }}'
-          release_tag='${{ needs.resolve.outputs.runtime_release_tag }}'
-          release_title='${{ needs.resolve.outputs.runtime_release_title }}'
+          rootfs_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.rootfs_release_dir }}"
           release_notes_file="$(mktemp)"
 
           {
-            echo '## Tavern Android runtime image'
+            echo '## Tavern rootfs prerequisite'
             echo
+            echo '- Host version: ${{ needs.plan.outputs.host_version }}'
             echo '- Runtime RID: linux-arm64'
-            echo '- Source: built in tavern-upstream-apk'
             echo '- Source commit: ${{ github.sha }}'
-            echo '- Workflow: tavern-upstream-apk'
           } > "$release_notes_file"
 
-          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
-            gh release create "$release_tag" \
+          if ! gh release view '${{ needs.plan.outputs.rootfs_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            gh release create '${{ needs.plan.outputs.rootfs_release_tag }}' \
               --repo '${{ github.repository }}' \
               --target '${{ github.sha }}' \
-              --title "$release_title" \
+              --title '${{ needs.plan.outputs.rootfs_release_title }}' \
               --notes-file "$release_notes_file"
           fi
 
-          gh release edit "$release_tag" \
+          gh release edit '${{ needs.plan.outputs.rootfs_release_tag }}' \
             --repo '${{ github.repository }}' \
-            --title "$release_title" \
+            --title '${{ needs.plan.outputs.rootfs_release_title }}' \
             --notes-file "$release_notes_file" > /dev/null
 
-          gh release upload "$release_tag" \
-            "$runtime_image_path" \
-            "$runtime_metadata_path" \
-            "$runtime_sha256_path" \
+          gh release upload '${{ needs.plan.outputs.rootfs_release_tag }}' \
+            "$rootfs_dir/${{ needs.plan.outputs.rootfs_asset_name }}" \
+            "$rootfs_dir/${{ needs.plan.outputs.rootfs_metadata_name }}" \
+            "$rootfs_dir/${{ needs.plan.outputs.rootfs_asset_name }}.sha256" \
             --repo '${{ github.repository }}' \
             --clobber
 
-      - name: Upload runtime prerequisite artifact
+      - name: Upload rootfs artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.runtime_paths.outputs.runtime_bundle_name }}
-          path: |
-            ${{ steps.runtime_paths.outputs.runtime_image_path }}
-            ${{ steps.runtime_paths.outputs.runtime_metadata_path }}
-            ${{ steps.runtime_paths.outputs.runtime_sha256_path }}
+          name: ${{ needs.plan.outputs.rootfs_release_tag }}
+          path: ${{ needs.plan.outputs.rootfs_release_dir }}
           if-no-files-found: error
 
-      - name: Append runtime prerequisite summary
+      - name: Append rootfs summary
         run: |
           {
-            echo '### Tavern runtime image'
+            echo '### Rootfs prerequisite'
             echo
-            echo '- Runtime RID: linux-arm64'
-            echo '- Source: ${{ steps.runtime_prereq.outputs.runtime_source }}'
-            echo '- Cache hit: ${{ steps.runtime_status.outputs.runtime_cache_hit }}'
-            echo '- Release tag: ${{ needs.resolve.outputs.runtime_release_tag }}'
+            echo '- Source: ${{ steps.resolve.outputs.source }}'
+            echo '- Release tag: ${{ needs.plan.outputs.rootfs_release_tag }}'
+            echo '- Asset: ${{ needs.plan.outputs.rootfs_asset_name }}'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Cleanup runtime workspace artifacts
-        if: always()
-        run: |
-          set -euo pipefail
-
-          rm -rf \
-            "$GITHUB_WORKSPACE/artifacts/prerequisites/runtime-image" \
-            "$GITHUB_WORKSPACE/artifacts/tmp/android-tavern-runtime-image" \
-            "$GITHUB_WORKSPACE/artifacts/tmp/tavern-runtime-image-linux-arm64"
-
   dependency_prereq:
-    needs: resolve
-    if: needs.resolve.outputs.should_build == 'true'
+    needs: plan
     runs-on: ubuntu-latest
     outputs:
-      dependency_source: ${{ steps.dependency_prereq.outputs.dependency_source }}
-      dependency_cache_hit: ${{ steps.dependency_status.outputs.dependency_cache_hit }}
-      dependency_bundle_name: ${{ steps.dependency_paths.outputs.dependency_bundle_name }}
+      source: ${{ steps.resolve.outputs.source }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Clean dependency prerequisite workspace artifacts
-        run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs"
-
-      - name: Prepare dependency prerequisite paths
-        id: dependency_paths
-        run: |
-          set -euo pipefail
-
-          dependency_asset_dir="$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs/linux-arm64"
-          dependency_bundle_name='tavern-dependency-packs-linux-arm64'
-
-          mkdir -p "$dependency_asset_dir"
-
-          {
-            printf 'dependency_asset_dir=%s\n' "$dependency_asset_dir"
-            printf 'dependency_bundle_name=%s\n' "$dependency_bundle_name"
-            printf 'dependency_index_path=%s\n' "$dependency_asset_dir/${{ needs.resolve.outputs.dependency_index_name }}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached dependency prerequisite
-        id: dependency_cache
-        if: needs.resolve.outputs.force_rebuild != 'true'
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.dependency_paths.outputs.dependency_asset_dir }}
-          key: tavern-upstream-dependency-prereq-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-dependency-packs.sh', 'stai-build-config.json') }}
-
-      - name: Resolve dependency prerequisite
-        id: dependency_prereq
-        run: |
-          set -euo pipefail
-
-          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
-          dependency_index_path='${{ steps.dependency_paths.outputs.dependency_index_path }}'
-          dependency_source='cache'
-
-          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.payload_changed }}' = 'true' ]; then
-            dependency_source='built'
-          elif [ -f "$dependency_index_path" ]; then
-            dependency_source='cache'
-          else
-            dependency_source='release'
-            rm -rf "$dependency_asset_dir"
-            mkdir -p "$dependency_asset_dir"
-
-            if gh release view '${{ needs.resolve.outputs.dependency_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
-              gh release download '${{ needs.resolve.outputs.dependency_release_tag }}' \
-                --repo '${{ github.repository }}' \
-                --dir "$dependency_asset_dir" \
-                --pattern '*.manifest.json' \
-                --pattern 'dependency-*.zip' \
-                --pattern '${{ needs.resolve.outputs.dependency_index_name }}' \
-                --clobber
-            fi
-
-            if [ ! -f "$dependency_index_path" ]; then
-              dependency_source='built'
-            fi
-          fi
-
-          if [ "$dependency_source" != 'built' ] && [ ! -f "$dependency_index_path" ]; then
-            echo "缺少依赖包索引：$dependency_index_path" >&2
-            exit 1
-          fi
-
-          printf 'dependency_source=%s\n' "$dependency_source" >> "$GITHUB_OUTPUT"
-
       - name: Checkout dependency packaging sources
-        if: steps.dependency_prereq.outputs.dependency_source == 'built'
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            stai-build-config.json
             scripts
+            stai-build-config.json
 
       - name: Restore dependency packaging caches
-        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        if: needs.plan.outputs.force_rebuild != 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/stai-android-toolchain
-          key: tavern-upstream-dependency-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-dependency-packs.sh', 'stai-build-config.json') }}
+            ~/.cache/stai-tavern-dependency-packs
+          key: tavern-dependency-packs-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/build-tavern-dependency-packs.sh', 'stai-build-config.json') }}
           restore-keys: |
-            tavern-upstream-dependency-build-${{ runner.os }}-
+            tavern-dependency-packs-${{ runner.os }}-
 
-      - name: Install dependency packaging prerequisites
-        if: steps.dependency_prereq.outputs.dependency_source == 'built'
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
-
-      - name: Build dependency prerequisite
-        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+      - name: Resolve dependency prerequisite source
+        id: resolve
         run: |
           set -euo pipefail
 
-          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
-          rm -rf "$dependency_asset_dir"
+          dependency_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
+          source='built'
+
+          mkdir -p "$dependency_dir"
+
+          if [ '${{ needs.plan.outputs.force_rebuild }}' != 'true' ] && [ '${{ needs.plan.outputs.dependency_changed }}' != 'true' ]; then
+            if gh release view '${{ needs.plan.outputs.dependency_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              gh release download '${{ needs.plan.outputs.dependency_release_tag }}' \
+                --repo '${{ github.repository }}' \
+                --dir "$dependency_dir" \
+                --pattern '*.zip' \
+                --pattern '*.manifest.json' \
+                --pattern '${{ needs.plan.outputs.dependency_index_name }}' \
+                --clobber || true
+            fi
+
+            if [ -f "$dependency_dir/${{ needs.plan.outputs.dependency_index_name }}" ]; then
+              source='release'
+            fi
+          fi
+
+          printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+
+      - name: Build dependency prerequisite
+        if: steps.resolve.outputs.source == 'built'
+        run: |
+          set -euo pipefail
 
           bash ./scripts/build-tavern-dependency-packs.sh \
             --runtime-rid linux-arm64 \
-            --target-root "$dependency_asset_dir" \
-            --working-root "$RUNNER_TEMP/android-tavern-dependency-packs"
+            --target-root "$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
 
-      - name: Finalize dependency prerequisite status
-        id: dependency_status
+      - name: Verify dependency prerequisite files
         run: |
           set -euo pipefail
 
-          dependency_source='${{ steps.dependency_prereq.outputs.dependency_source }}'
-          dependency_cache_hit='${{ steps.dependency_cache.outputs.cache-hit }}'
-
-          if [ "$dependency_source" != 'cache' ] || [ "$dependency_cache_hit" != 'true' ]; then
-            dependency_cache_hit='false'
-          fi
-
-          {
-            printf 'dependency_source=%s\n' "$dependency_source"
-            printf 'dependency_cache_hit=%s\n' "$dependency_cache_hit"
-          } >> "$GITHUB_OUTPUT"
+          dependency_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
+          test -f "$dependency_dir/${{ needs.plan.outputs.dependency_index_name }}"
 
       - name: Publish dependency prerequisite release
-        if: steps.dependency_prereq.outputs.dependency_source == 'built'
+        if: steps.resolve.outputs.source == 'built'
         run: |
           set -euo pipefail
+          shopt -s nullglob
 
-          dependency_asset_dir='${{ steps.dependency_paths.outputs.dependency_asset_dir }}'
-          release_tag='${{ needs.resolve.outputs.dependency_release_tag }}'
-          release_title='${{ needs.resolve.outputs.dependency_release_title }}'
+          dependency_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
           release_notes_file="$(mktemp)"
+          assets=("$dependency_dir"/*.zip "$dependency_dir"/*.manifest.json "$dependency_dir/${{ needs.plan.outputs.dependency_index_name }}")
 
           {
-            echo '## Tavern Android dependency packs'
+            echo '## Tavern dependency packs prerequisite'
             echo
+            echo '- Host version: ${{ needs.plan.outputs.host_version }}'
             echo '- Runtime RID: linux-arm64'
-            echo '- Source: built in tavern-upstream-apk'
             echo '- Source commit: ${{ github.sha }}'
-            echo '- Workflow: tavern-upstream-apk'
           } > "$release_notes_file"
 
-          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
-            gh release create "$release_tag" \
+          if ! gh release view '${{ needs.plan.outputs.dependency_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            gh release create '${{ needs.plan.outputs.dependency_release_tag }}' \
               --repo '${{ github.repository }}' \
               --target '${{ github.sha }}' \
-              --title "$release_title" \
+              --title '${{ needs.plan.outputs.dependency_release_title }}' \
               --notes-file "$release_notes_file"
           fi
 
-          gh release edit "$release_tag" \
+          gh release edit '${{ needs.plan.outputs.dependency_release_tag }}' \
             --repo '${{ github.repository }}' \
-            --title "$release_title" \
+            --title '${{ needs.plan.outputs.dependency_release_title }}' \
             --notes-file "$release_notes_file" > /dev/null
 
-          gh release upload "$release_tag" \
-            "$dependency_asset_dir"/* \
+          gh release upload '${{ needs.plan.outputs.dependency_release_tag }}' \
+            "${assets[@]}" \
             --repo '${{ github.repository }}' \
             --clobber
 
-      - name: Upload dependency prerequisite artifact
+      - name: Upload dependency artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.dependency_paths.outputs.dependency_bundle_name }}
-          path: ${{ steps.dependency_paths.outputs.dependency_asset_dir }}
+          name: ${{ needs.plan.outputs.dependency_release_tag }}
+          path: ${{ needs.plan.outputs.dependency_release_dir }}
           if-no-files-found: error
 
-      - name: Append dependency prerequisite summary
+      - name: Append dependency summary
         run: |
           {
-            echo '### Tavern dependency packs'
+            echo '### Dependency prerequisite'
             echo
-            echo '- Runtime RID: linux-arm64'
-            echo '- Source: ${{ steps.dependency_prereq.outputs.dependency_source }}'
-            echo '- Cache hit: ${{ steps.dependency_status.outputs.dependency_cache_hit }}'
-            echo '- Release tag: ${{ needs.resolve.outputs.dependency_release_tag }}'
+            echo '- Source: ${{ steps.resolve.outputs.source }}'
+            echo '- Release tag: ${{ needs.plan.outputs.dependency_release_tag }}'
+            echo '- Index: ${{ needs.plan.outputs.dependency_index_name }}'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Cleanup dependency workspace artifacts
-        if: always()
-        run: |
-          set -euo pipefail
-
-          rm -rf \
-            "$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs" \
-            "$RUNNER_TEMP/android-tavern-dependency-packs"
-
   server_prereq:
-    needs: resolve
-    if: needs.resolve.outputs.should_build == 'true'
+    needs: plan
     runs-on: ubuntu-latest
     outputs:
-      server_source: ${{ steps.server_prereq.outputs.server_source }}
-      server_cache_hit: ${{ steps.server_status.outputs.server_cache_hit }}
-      server_bundle_name: ${{ steps.server_paths.outputs.server_bundle_name }}
+      source: ${{ steps.resolve.outputs.source }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Clean server prerequisite workspace artifacts
-        run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts/prerequisites/server-package"
-
-      - name: Prepare server prerequisite paths
-        id: server_paths
-        run: |
-          set -euo pipefail
-
-          server_asset_dir="$GITHUB_WORKSPACE/artifacts/prerequisites/server-package/${{ needs.resolve.outputs.tavern_tag }}"
-          server_bundle_name="tavern-server-core-${{ needs.resolve.outputs.safe_tag }}-linux-arm64"
-
-          mkdir -p "$server_asset_dir"
-
-          {
-            printf 'server_asset_dir=%s\n' "$server_asset_dir"
-            printf 'server_bundle_name=%s\n' "$server_bundle_name"
-            printf 'server_package_path=%s\n' "$server_asset_dir/${{ needs.resolve.outputs.server_asset_name }}"
-            printf 'server_manifest_path=%s\n' "$server_asset_dir/${{ needs.resolve.outputs.server_manifest_name }}"
-            printf 'server_sha256_path=%s\n' "$server_asset_dir/${{ needs.resolve.outputs.server_asset_name }}.sha256"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Restore cached server core prerequisite
-        id: server_cache
-        if: needs.resolve.outputs.force_rebuild != 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ steps.server_paths.outputs.server_package_path }}
-            ${{ steps.server_paths.outputs.server_manifest_path }}
-          key: tavern-upstream-server-prereq-${{ runner.os }}-${{ needs.resolve.outputs.tavern_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**') }}
-
-      - name: Resolve Tavern server core prerequisite
-        id: server_prereq
-        run: |
-          set -euo pipefail
-
-          server_package_path='${{ steps.server_paths.outputs.server_package_path }}'
-          server_manifest_path='${{ steps.server_paths.outputs.server_manifest_path }}'
-          server_source='cache'
-
-          if [ '${{ needs.resolve.outputs.force_rebuild }}' = 'true' ] || [ '${{ needs.resolve.outputs.server_changed }}' = 'true' ]; then
-            server_source='built'
-          elif [ -f "$server_package_path" ] && [ -f "$server_manifest_path" ]; then
-            server_source='cache'
-          else
-            server_source='release'
-            rm -f "$server_package_path" "$server_manifest_path"
-
-            if gh release view '${{ needs.resolve.outputs.server_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
-              gh release download '${{ needs.resolve.outputs.server_release_tag }}' \
-                --repo '${{ github.repository }}' \
-                --dir '${{ steps.server_paths.outputs.server_asset_dir }}' \
-                --pattern '${{ needs.resolve.outputs.server_asset_name }}' \
-                --pattern '${{ needs.resolve.outputs.server_manifest_name }}' \
-                --clobber
-            fi
-
-            if [ ! -f "$server_package_path" ] || [ ! -f "$server_manifest_path" ]; then
-              server_source='built'
-            fi
-          fi
-
-          if [ "$server_source" != 'built' ]; then
-            if [ ! -f "$server_package_path" ]; then
-              echo "缺少 Tavern server core：$server_package_path" >&2
-              exit 1
-            fi
-
-            if [ ! -f "$server_manifest_path" ]; then
-              echo "缺少 Tavern server core manifest：$server_manifest_path" >&2
-              exit 1
-            fi
-          fi
-
-          printf 'server_source=%s\n' "$server_source" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout server packaging sources
-        if: steps.server_prereq.outputs.server_source == 'built'
+      - name: Checkout server source inputs
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            stai-build-config.json
             android-tavern/server-overlay
             scripts
+            stai-build-config.json
 
-      - name: Restore Tavern server packaging caches
-        if: steps.server_prereq.outputs.server_source == 'built'
+      - name: Restore server source packaging caches
+        if: needs.plan.outputs.force_rebuild != 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/stai-android-toolchain
+            ~/.cache/stai-tavern-android-bootstrap
             ~/.npm
-          key: tavern-upstream-server-build-${{ runner.os }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**') }}
+          key: tavern-server-source-${{ runner.os }}-${{ needs.plan.outputs.safe_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**', 'stai-build-config.json') }}
           restore-keys: |
-            tavern-upstream-server-build-${{ runner.os }}-
+            tavern-server-source-${{ runner.os }}-${{ needs.plan.outputs.safe_tag }}-
+            tavern-server-source-${{ runner.os }}-
 
-      - name: Install server packaging prerequisites
-        if: steps.server_prereq.outputs.server_source == 'built'
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip xz-utils
-
-      - name: Build Tavern server core prerequisite
-        if: steps.server_prereq.outputs.server_source == 'built'
+      - name: Resolve server source prerequisite availability
+        id: resolve
         run: |
           set -euo pipefail
 
-          server_package_path='${{ steps.server_paths.outputs.server_package_path }}'
-          server_manifest_path='${{ steps.server_paths.outputs.server_manifest_path }}'
+          server_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.server_release_dir }}"
+          server_path="$server_dir/${{ needs.plan.outputs.server_asset_name }}"
+          server_manifest_path="$server_dir/${{ needs.plan.outputs.server_manifest_name }}"
+          source='built'
 
-          rm -f "$server_package_path" "$server_manifest_path"
+          mkdir -p "$server_dir"
+
+          if [ '${{ needs.plan.outputs.force_rebuild }}' != 'true' ] && [ '${{ needs.plan.outputs.server_changed }}' != 'true' ]; then
+            if gh release view '${{ needs.plan.outputs.server_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              gh release download '${{ needs.plan.outputs.server_release_tag }}' \
+                --repo '${{ github.repository }}' \
+                --dir "$server_dir" \
+                --pattern '${{ needs.plan.outputs.server_asset_name }}' \
+                --pattern '${{ needs.plan.outputs.server_manifest_name }}' \
+                --clobber || true
+            fi
+
+            if [ -f "$server_path" ] && [ -f "$server_manifest_path" ]; then
+              source='release'
+            fi
+          fi
+
+          printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+
+      - name: Build server source prerequisite
+        if: steps.resolve.outputs.source == 'built'
+        run: |
+          set -euo pipefail
 
           bash ./scripts/sync-tavern-android-bootstrap.sh \
             --runtime-rid linux-arm64 \
-            --tag '${{ needs.resolve.outputs.tavern_tag }}' \
-            --target-root '${{ steps.server_paths.outputs.server_asset_dir }}' \
-            --working-root "$RUNNER_TEMP/android-tavern-bootstrap" \
-            --server-core-only
+            --tag '${{ needs.plan.outputs.tavern_tag }}' \
+            --target-root "$GITHUB_WORKSPACE/${{ needs.plan.outputs.server_release_dir }}"
 
-      - name: Finalize server prerequisite status
-        id: server_status
+      - name: Verify server source prerequisite files
         run: |
           set -euo pipefail
 
-          server_source='${{ steps.server_prereq.outputs.server_source }}'
-          server_cache_hit='${{ steps.server_cache.outputs.cache-hit }}'
-          server_package_path='${{ steps.server_paths.outputs.server_package_path }}'
-          server_sha256_path='${{ steps.server_paths.outputs.server_sha256_path }}'
+          server_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.server_release_dir }}"
+          test -f "$server_dir/${{ needs.plan.outputs.server_asset_name }}"
+          test -f "$server_dir/${{ needs.plan.outputs.server_manifest_name }}"
 
-          sha256sum "$server_package_path" | awk '{print $1}' > "$server_sha256_path"
-
-          if [ "$server_source" != 'cache' ] || [ "$server_cache_hit" != 'true' ]; then
-            server_cache_hit='false'
-          fi
-
-          {
-            printf 'server_source=%s\n' "$server_source"
-            printf 'server_cache_hit=%s\n' "$server_cache_hit"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Publish server core prerequisite release
-        if: steps.server_prereq.outputs.server_source == 'built'
+      - name: Publish server source prerequisite release
+        if: steps.resolve.outputs.source == 'built'
         run: |
           set -euo pipefail
 
-          server_package_path='${{ steps.server_paths.outputs.server_package_path }}'
-          server_manifest_path='${{ steps.server_paths.outputs.server_manifest_path }}'
-          server_sha256_path='${{ steps.server_paths.outputs.server_sha256_path }}'
-          release_tag='${{ needs.resolve.outputs.server_release_tag }}'
-          release_title='${{ needs.resolve.outputs.server_release_title }}'
+          server_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.server_release_dir }}"
           release_notes_file="$(mktemp)"
 
           {
-            echo '## Tavern Android server core'
+            echo '## Tavern server source prerequisite'
             echo
+            echo '- Host version: ${{ needs.plan.outputs.host_version }}'
+            echo '- Tavern tag: ${{ needs.plan.outputs.tavern_tag }}'
             echo '- Runtime RID: linux-arm64'
-            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
-            echo '- Source: built in tavern-upstream-apk'
             echo '- Source commit: ${{ github.sha }}'
-            echo '- Workflow: tavern-upstream-apk'
           } > "$release_notes_file"
 
-          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
-            gh release create "$release_tag" \
+          if ! gh release view '${{ needs.plan.outputs.server_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            gh release create '${{ needs.plan.outputs.server_release_tag }}' \
               --repo '${{ github.repository }}' \
               --target '${{ github.sha }}' \
-              --title "$release_title" \
+              --title '${{ needs.plan.outputs.server_release_title }}' \
               --notes-file "$release_notes_file"
           fi
 
-          gh release edit "$release_tag" \
+          gh release edit '${{ needs.plan.outputs.server_release_tag }}' \
             --repo '${{ github.repository }}' \
-            --title "$release_title" \
+            --title '${{ needs.plan.outputs.server_release_title }}' \
             --notes-file "$release_notes_file" > /dev/null
 
-          gh release upload "$release_tag" \
-            "$server_package_path" \
-            "$server_manifest_path" \
-            "$server_sha256_path" \
+          gh release upload '${{ needs.plan.outputs.server_release_tag }}' \
+            "$server_dir/${{ needs.plan.outputs.server_asset_name }}" \
+            "$server_dir/${{ needs.plan.outputs.server_manifest_name }}" \
             --repo '${{ github.repository }}' \
             --clobber
 
-      - name: Upload server prerequisite artifact
+      - name: Upload server artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.server_paths.outputs.server_bundle_name }}
-          path: |
-            ${{ steps.server_paths.outputs.server_package_path }}
-            ${{ steps.server_paths.outputs.server_manifest_path }}
-            ${{ steps.server_paths.outputs.server_sha256_path }}
+          name: ${{ needs.plan.outputs.server_release_tag }}
+          path: ${{ needs.plan.outputs.server_release_dir }}
           if-no-files-found: error
 
-      - name: Append server prerequisite summary
+      - name: Append server source summary
         run: |
           {
-            echo '### Tavern server core'
+            echo '### Server source prerequisite'
             echo
-            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
-            echo '- Source: ${{ steps.server_prereq.outputs.server_source }}'
-            echo '- Cache hit: ${{ steps.server_status.outputs.server_cache_hit }}'
-            echo '- Release tag: ${{ needs.resolve.outputs.server_release_tag }}'
+            echo '- Source: ${{ steps.resolve.outputs.source }}'
+            echo '- Release tag: ${{ needs.plan.outputs.server_release_tag }}'
+            echo '- Asset: ${{ needs.plan.outputs.server_asset_name }}'
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Cleanup server workspace artifacts
-        if: always()
-        run: |
-          set -euo pipefail
-
-          rm -rf \
-            "$GITHUB_WORKSPACE/artifacts/prerequisites/server-package" \
-            "$RUNNER_TEMP/android-tavern-bootstrap"
 
   build:
     needs:
-      - resolve
-      - runtime_prereq
+      - plan
+      - rootfs_prereq
       - dependency_prereq
       - server_prereq
-    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     outputs:
-      release_asset_name: ${{ steps.package.outputs.release_asset_name }}
-      apk_sha256: ${{ steps.package.outputs.apk_sha256 }}
-      apk_size_bytes: ${{ steps.package.outputs.apk_size_bytes }}
+      source: ${{ steps.resolve.outputs.source }}
+      release_asset_name: ${{ steps.collect.outputs.release_asset_name }}
+      apk_sha256: ${{ steps.collect.outputs.apk_sha256 }}
+      apk_size_bytes: ${{ steps.collect.outputs.apk_size_bytes }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout
+      - name: Resolve APK build source
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          release_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.apk_release_dir }}"
+          release_asset_name='${{ needs.plan.outputs.artifact_name }}.apk'
+          release_asset_path="$release_dir/$release_asset_name"
+          release_sha256_path="$release_asset_path.sha256"
+          release_metadata_path="$release_dir/${{ needs.plan.outputs.artifact_name }}.update.json"
+          source='built'
+
+          mkdir -p "$release_dir"
+
+          if [ '${{ needs.plan.outputs.force_rebuild }}' != 'true' ] \
+            && [ '${{ needs.plan.outputs.apk_changed }}' != 'true' ] \
+            && [ '${{ needs.rootfs_prereq.outputs.source }}' != 'built' ] \
+            && [ '${{ needs.dependency_prereq.outputs.source }}' != 'built' ] \
+            && [ '${{ needs.server_prereq.outputs.source }}' != 'built' ]; then
+            if gh release view '${{ needs.plan.outputs.release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+              gh release download '${{ needs.plan.outputs.release_tag }}' \
+                --repo '${{ github.repository }}' \
+                --dir "$release_dir" \
+                --pattern "$release_asset_name" \
+                --pattern "$release_asset_name.sha256" \
+                --pattern '${{ needs.plan.outputs.artifact_name }}.update.json' \
+                --clobber || true
+            fi
+
+            if [ -f "$release_asset_path" ] && [ -f "$release_sha256_path" ] && [ -f "$release_metadata_path" ]; then
+              source='release'
+            fi
+          fi
+
+          printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout APK build sources
+        if: steps.resolve.outputs.source == 'built'
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
             .github
-            stai-build-config.json
             android-tavern
             gradle
             gradlew
             gradlew.bat
             scripts
-
-      - name: Clean workspace artifact directories
-        run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts/release" "$GITHUB_WORKSPACE/artifacts/prerequisites"
+            stai-build-config.json
 
       - name: Restore Tavern Android build caches
+        if: steps.resolve.outputs.source == 'built'
         uses: actions/cache@v4
         with:
           path: |
@@ -1017,11 +602,13 @@ jobs:
             tavern-upstream-apk-${{ runner.os }}-
 
       - name: Install Android build prerequisites
+        if: steps.resolve.outputs.source == 'built'
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip zip binutils xz-utils
 
       - name: Prepare release signing inputs
+        if: steps.resolve.outputs.source == 'built'
         id: signing
         env:
           ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
@@ -1031,7 +618,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ '${{ needs.resolve.outputs.build_type }}' != 'release' ]; then
+          if [ '${{ needs.plan.outputs.build_type }}' != 'release' ]; then
+            printf 'signing_source=%s\n' 'none' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -1073,206 +661,57 @@ jobs:
           echo 'release 构建缺少签名配置；请配置 GitHub Actions secrets，或将 android-tavern/app/signing/release.keystore 与 android-tavern/app/signing/release-signing.properties 提交进仓库。' >&2
           exit 1
 
-      - name: Download runtime prerequisite artifact
+      - name: Download rootfs artifact
+        if: steps.resolve.outputs.source == 'built'
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.runtime_prereq.outputs.runtime_bundle_name }}
-          path: artifacts/prerequisites/runtime-image
+          name: ${{ needs.plan.outputs.rootfs_release_tag }}
+          path: ${{ needs.plan.outputs.rootfs_release_dir }}
 
-      - name: Download dependency prerequisite artifact
+      - name: Download dependency artifact
+        if: steps.resolve.outputs.source == 'built'
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.dependency_prereq.outputs.dependency_bundle_name }}
-          path: artifacts/prerequisites/dependency-packs/linux-arm64
+          name: ${{ needs.plan.outputs.dependency_release_tag }}
+          path: ${{ needs.plan.outputs.dependency_release_dir }}
 
-      - name: Resolve downloaded runtime artifact paths
-        id: runtime_input
-        run: |
-          set -euo pipefail
-
-          runtime_root="$GITHUB_WORKSPACE/artifacts/prerequisites/runtime-image"
-          runtime_image_path="$runtime_root/${{ needs.resolve.outputs.runtime_asset_name }}"
-          runtime_metadata_path="$runtime_root/${{ needs.resolve.outputs.runtime_metadata_name }}"
-
-          if [ ! -f "$runtime_image_path" ]; then
-            mapfile -t runtime_image_candidates < <(find "$runtime_root" -type f -name '${{ needs.resolve.outputs.runtime_asset_name }}' | sort)
-            case "${#runtime_image_candidates[@]}" in
-              1)
-                runtime_image_path="${runtime_image_candidates[0]}"
-                ;;
-              0)
-                echo "缺少下载后的 runtime image：$runtime_image_path" >&2
-                exit 1
-                ;;
-              *)
-                printf '检测到多个 runtime image，无法自动判定目标文件：\n' >&2
-                printf '  %s\n' "${runtime_image_candidates[@]}" >&2
-                exit 1
-                ;;
-            esac
-          fi
-
-          if [ ! -f "$runtime_metadata_path" ]; then
-            mapfile -t runtime_metadata_candidates < <(find "$runtime_root" -type f -name '${{ needs.resolve.outputs.runtime_metadata_name }}' | sort)
-            case "${#runtime_metadata_candidates[@]}" in
-              1)
-                runtime_metadata_path="${runtime_metadata_candidates[0]}"
-                ;;
-              0)
-                echo "缺少下载后的 runtime metadata：$runtime_metadata_path" >&2
-                exit 1
-                ;;
-              *)
-                printf '检测到多个 runtime metadata，无法自动判定目标文件：\n' >&2
-                printf '  %s\n' "${runtime_metadata_candidates[@]}" >&2
-                exit 1
-                ;;
-            esac
-          fi
-
-          {
-            printf 'runtime_image_path=%s\n' "$runtime_image_path"
-            printf 'runtime_metadata_path=%s\n' "$runtime_metadata_path"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Download server prerequisite artifact
+      - name: Download server artifact
+        if: steps.resolve.outputs.source == 'built'
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.server_prereq.outputs.server_bundle_name }}
-          path: artifacts/prerequisites/server-package/${{ needs.resolve.outputs.tavern_tag }}
-
-      - name: Resolve downloaded dependency artifact paths
-        id: dependency_input
-        run: |
-          set -euo pipefail
-
-          dependency_root="$GITHUB_WORKSPACE/artifacts/prerequisites/dependency-packs/linux-arm64"
-          dependency_index_path="$dependency_root/${{ needs.resolve.outputs.dependency_index_name }}"
-
-          if [ ! -f "$dependency_index_path" ]; then
-            mapfile -t dependency_index_candidates < <(find "$dependency_root" -type f -name '${{ needs.resolve.outputs.dependency_index_name }}' | sort)
-            case "${#dependency_index_candidates[@]}" in
-              1)
-                dependency_index_path="${dependency_index_candidates[0]}"
-                dependency_root="$(dirname "$dependency_index_path")"
-                ;;
-              0)
-                echo "缺少下载后的 dependency index：$dependency_index_path" >&2
-                exit 1
-                ;;
-              *)
-                printf '检测到多个 dependency index，无法自动判定目标文件：\n' >&2
-                printf '  %s\n' "${dependency_index_candidates[@]}" >&2
-                exit 1
-                ;;
-            esac
-          fi
-
-          {
-            printf 'dependency_root=%s\n' "$dependency_root"
-            printf 'dependency_index_path=%s\n' "$dependency_index_path"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Resolve downloaded server artifact paths
-        id: server_input
-        run: |
-          set -euo pipefail
-
-          server_root="$GITHUB_WORKSPACE/artifacts/prerequisites/server-package/${{ needs.resolve.outputs.tavern_tag }}"
-          server_package_path="$server_root/${{ needs.resolve.outputs.server_asset_name }}"
-          server_manifest_path="$server_root/${{ needs.resolve.outputs.server_manifest_name }}"
-
-          if [ ! -f "$server_package_path" ]; then
-            mapfile -t server_package_candidates < <(find "$server_root" -type f -name '${{ needs.resolve.outputs.server_asset_name }}' | sort)
-            case "${#server_package_candidates[@]}" in
-              1)
-                server_package_path="${server_package_candidates[0]}"
-                ;;
-              0)
-                echo "缺少下载后的 Tavern server core：$server_package_path" >&2
-                exit 1
-                ;;
-              *)
-                printf '检测到多个 Tavern server core，无法自动判定目标文件：\n' >&2
-                printf '  %s\n' "${server_package_candidates[@]}" >&2
-                exit 1
-                ;;
-            esac
-          fi
-
-          if [ ! -f "$server_manifest_path" ]; then
-            mapfile -t server_manifest_candidates < <(find "$server_root" -type f -name '${{ needs.resolve.outputs.server_manifest_name }}' | sort)
-            case "${#server_manifest_candidates[@]}" in
-              1)
-                server_manifest_path="${server_manifest_candidates[0]}"
-                ;;
-              0)
-                echo "缺少下载后的 Tavern server core manifest：$server_manifest_path" >&2
-                exit 1
-                ;;
-              *)
-                printf '检测到多个 Tavern server core manifest，无法自动判定目标文件：\n' >&2
-                printf '  %s\n' "${server_manifest_candidates[@]}" >&2
-                exit 1
-                ;;
-            esac
-          fi
-
-          {
-            printf 'server_package_path=%s\n' "$server_package_path"
-            printf 'server_manifest_path=%s\n' "$server_manifest_path"
-          } >> "$GITHUB_OUTPUT"
+          name: ${{ needs.plan.outputs.server_release_tag }}
+          path: ${{ needs.plan.outputs.server_release_dir }}
 
       - name: Build Tavern APK
-        id: package
+        if: steps.resolve.outputs.source == 'built'
         run: |
           set -euo pipefail
 
           export STAI_TAVERN_ANDROID_BUILD_ROOT="$RUNNER_TEMP/stai-tavern-android-build"
-          export STAI_ANDROID_HOST_VERSION='${{ needs.resolve.outputs.host_version }}'
-          export STAI_ANDROID_UPSTREAM_VERSION='${{ needs.resolve.outputs.tavern_tag }}'
-          export STAI_ANDROID_VERSION_NAME='${{ needs.resolve.outputs.version_name }}'
-          export STAI_ANDROID_VERSION_CODE='${{ needs.resolve.outputs.version_code }}'
+          export STAI_ANDROID_HOST_VERSION='${{ needs.plan.outputs.host_version }}'
+          export STAI_ANDROID_UPSTREAM_VERSION='${{ needs.plan.outputs.tavern_tag }}'
+          export STAI_ANDROID_VERSION_NAME='${{ needs.plan.outputs.version_name }}'
+          export STAI_ANDROID_VERSION_CODE='${{ needs.plan.outputs.version_code }}'
 
-          if [ '${{ needs.resolve.outputs.build_type }}' = 'release' ]; then
+          if [ '${{ needs.plan.outputs.build_type }}' = 'release' ] && [ '${{ steps.signing.outputs.signing_source }}' = 'github-secrets' ]; then
             export STAI_ANDROID_RELEASE_KEYSTORE_PATH='${{ steps.signing.outputs.keystore_path }}'
             export STAI_ANDROID_RELEASE_KEYSTORE_PASSWORD='${{ steps.signing.outputs.store_password }}'
             export STAI_ANDROID_RELEASE_KEY_ALIAS='${{ steps.signing.outputs.key_alias }}'
             export STAI_ANDROID_RELEASE_KEY_PASSWORD='${{ steps.signing.outputs.key_password }}'
           fi
 
-          generated_server_root="$GITHUB_WORKSPACE/artifacts/validation/android-tavern-server-package/linux-arm64"
-          validation_dependency_root="$GITHUB_WORKSPACE/artifacts/validation/android-tavern-dependency-packs/linux-arm64"
-          dependency_root='${{ steps.dependency_input.outputs.dependency_root }}'
-          dependency_index_path='${{ steps.dependency_input.outputs.dependency_index_path }}'
-
-          rm -rf "$generated_server_root"
-          rm -rf "$validation_dependency_root"
-          mkdir -p "$generated_server_root" "$validation_dependency_root"
-
-          cp '${{ steps.server_input.outputs.server_package_path }}' "$generated_server_root/server-core.zip"
-          cp '${{ steps.server_input.outputs.server_manifest_path }}' "$generated_server_root/server-core-manifest.json"
-          cp -R "$dependency_root/." "$validation_dependency_root/"
-
-          if [ -f "$dependency_index_path" ]; then
-            cp -f "$dependency_index_path" "$validation_dependency_root/${{ needs.resolve.outputs.dependency_index_name }}"
-          fi
-
-          echo "Host version: ${{ needs.resolve.outputs.host_version }}"
           bash ./scripts/build-tavern-android-apk.sh \
             --runtime-rid linux-arm64 \
-            --build-type '${{ needs.resolve.outputs.build_type }}' \
-            --runtime-image '${{ steps.runtime_input.outputs.runtime_image_path }}' \
-            --tag '${{ needs.resolve.outputs.tavern_tag }}'
+            --build-type '${{ needs.plan.outputs.build_type }}' \
+            --tag '${{ needs.plan.outputs.tavern_tag }}'
 
-          source_apk_path="$GITHUB_WORKSPACE/artifacts/validation/android-tavern/app-${{ needs.resolve.outputs.build_type }}.apk"
-          release_asset_dir="$GITHUB_WORKSPACE/artifacts/release"
-          release_asset_name='${{ needs.resolve.outputs.artifact_name }}.apk'
-          release_asset_path="$release_asset_dir/$release_asset_name"
+          source_apk_path="$GITHUB_WORKSPACE/${{ needs.plan.outputs.apk_release_dir }}/app-${{ needs.plan.outputs.build_type }}.apk"
+          release_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.apk_release_dir }}"
+          release_asset_name='${{ needs.plan.outputs.artifact_name }}.apk'
+          release_asset_path="$release_dir/$release_asset_name"
           release_sha256_path="$release_asset_path.sha256"
-          release_metadata_path="$release_asset_dir/${{ needs.resolve.outputs.artifact_name }}.update.json"
+          release_metadata_path="$release_dir/${{ needs.plan.outputs.artifact_name }}.update.json"
 
-          mkdir -p "$release_asset_dir"
           cp "$source_apk_path" "$release_asset_path"
 
           apk_sha256="$(sha256sum "$release_asset_path" | awk '{print $1}')"
@@ -1282,16 +721,32 @@ jobs:
           cat > "$release_metadata_path" <<EOF
           {
             "github_repository": "${{ github.repository }}",
-            "release_tag": "${{ needs.resolve.outputs.release_tag }}",
-            "host_version": "${{ needs.resolve.outputs.host_version }}",
-            "upstream_version": "${{ needs.resolve.outputs.tavern_tag }}",
-            "build_type": "${{ needs.resolve.outputs.build_type }}",
-            "version_name": "${{ needs.resolve.outputs.version_name }}",
+            "release_tag": "${{ needs.plan.outputs.release_tag }}",
+            "host_version": "${{ needs.plan.outputs.host_version }}",
+            "upstream_version": "${{ needs.plan.outputs.tavern_tag }}",
+            "build_type": "${{ needs.plan.outputs.build_type }}",
+            "version_name": "${{ needs.plan.outputs.version_name }}",
             "apk_asset_name": "$release_asset_name",
             "apk_sha256": "$apk_sha256",
             "apk_size_bytes": $apk_size_bytes
           }
           EOF
+
+      - name: Collect APK metadata
+        id: collect
+        run: |
+          set -euo pipefail
+
+          release_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.apk_release_dir }}"
+          release_asset_name='${{ needs.plan.outputs.artifact_name }}.apk'
+          release_asset_path="$release_dir/$release_asset_name"
+          release_sha256_path="$release_asset_path.sha256"
+
+          test -f "$release_asset_path"
+          test -f "$release_sha256_path"
+
+          apk_sha256="$(cat "$release_sha256_path")"
+          apk_size_bytes="$(stat -c '%s' "$release_asset_path")"
 
           {
             printf 'release_asset_name=%s\n' "$release_asset_name"
@@ -1299,133 +754,125 @@ jobs:
             printf 'apk_size_bytes=%s\n' "$apk_size_bytes"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload workflow artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ needs.resolve.outputs.artifact_name }}
+          name: ${{ needs.plan.outputs.artifact_name }}
           path: |
-            artifacts/release/*.apk
-            artifacts/release/*.sha256
-            artifacts/release/*.update.json
+            ${{ needs.plan.outputs.apk_release_dir }}/*.apk
+            ${{ needs.plan.outputs.apk_release_dir }}/*.sha256
+            ${{ needs.plan.outputs.apk_release_dir }}/*.update.json
           if-no-files-found: error
 
       - name: Append build summary
         run: |
           {
-            echo '### Tavern upstream APK'
+            echo '### Tavern Android build'
             echo
-            echo '- Status: built'
-            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
-            echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
-            echo '- Runtime changed: ${{ needs.resolve.outputs.runtime_changed }}'
-            echo '- Payload changed: ${{ needs.resolve.outputs.payload_changed }}'
-            echo '- Signing source: ${{ steps.signing.outputs.signing_source || 'none' }}'
-            echo '- Runtime prerequisite source: ${{ needs.runtime_prereq.outputs.runtime_source }}'
-            echo '- Runtime image: ${{ needs.resolve.outputs.runtime_asset_name }}'
-            echo '- Dependency packs source: ${{ needs.dependency_prereq.outputs.dependency_source }}'
-            echo '- Dependency packs release: ${{ needs.resolve.outputs.dependency_release_tag }}'
-            echo '- Server core source: ${{ needs.server_prereq.outputs.server_source }}'
-            echo '- Server core tag: ${{ needs.resolve.outputs.tavern_tag }}'
-            echo '- Release asset: ${{ steps.package.outputs.release_asset_name }}'
-            echo '- SHA256: ${{ steps.package.outputs.apk_sha256 }}'
-            echo '- Size bytes: ${{ steps.package.outputs.apk_size_bytes }}'
-            echo '- Update metadata: ${{ needs.resolve.outputs.artifact_name }}.update.json'
+            echo '- Source: ${{ steps.resolve.outputs.source }}'
+            echo '- Tavern tag: ${{ needs.plan.outputs.tavern_tag }}'
+            echo '- Build type: ${{ needs.plan.outputs.build_type }}'
+            echo '- Host version: ${{ needs.plan.outputs.host_version }}'
+            echo '- Rootfs source: ${{ needs.rootfs_prereq.outputs.source }}'
+            echo '- Dependency source: ${{ needs.dependency_prereq.outputs.source }}'
+            echo '- Server source: ${{ needs.server_prereq.outputs.source }}'
+            echo '- Release asset: ${{ steps.collect.outputs.release_asset_name }}'
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Cleanup build workspace artifacts
-        if: always()
-        run: |
-          set -euo pipefail
-
-          rm -rf \
-            "$GITHUB_WORKSPACE/artifacts/release" \
-            "$GITHUB_WORKSPACE/artifacts/prerequisites"
 
   publish:
     needs:
-      - resolve
-      - runtime_prereq
+      - plan
+      - rootfs_prereq
       - dependency_prereq
       - server_prereq
       - build
-    if: needs.resolve.outputs.should_build == 'true' && needs.resolve.outputs.publish_release == 'true'
+    if: needs.plan.outputs.publish_release == 'true'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout release notes sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.resolve.outputs.artifact_name }}
-          path: artifacts/release
+          name: ${{ needs.plan.outputs.artifact_name }}
+          path: ${{ needs.plan.outputs.apk_release_dir }}
 
-      - name: Ensure GitHub Release exists
+      - name: Publish GitHub release
         run: |
           set -euo pipefail
 
-          release_tag='${{ needs.resolve.outputs.release_tag }}'
-          release_title='${{ needs.resolve.outputs.release_title }}'
-          release_prerelease='${{ needs.resolve.outputs.release_prerelease }}'
           release_notes_file="$(mktemp)"
+          release_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.apk_release_dir }}"
+          prerelease_flag=''
+
+          if [ '${{ needs.plan.outputs.release_prerelease }}' = 'true' ]; then
+            prerelease_flag='--prerelease'
+          fi
 
           {
             echo '## SillyTavern Android APK'
             echo
-            echo '- Host version: ${{ needs.resolve.outputs.host_version }}'
+            echo '- Host version: ${{ needs.plan.outputs.host_version }}'
             echo '- Upstream repo: SillyTavern/SillyTavern'
-            echo '- Upstream tag: ${{ needs.resolve.outputs.tavern_tag }}'
-            echo '- Build type: ${{ needs.resolve.outputs.build_type }}'
-            echo '- Runtime prerequisite source: ${{ needs.runtime_prereq.outputs.runtime_source }}'
-            echo '- Runtime image: ${{ needs.resolve.outputs.runtime_asset_name }}'
-            echo '- Dependency packs source: ${{ needs.dependency_prereq.outputs.dependency_source }}'
-            echo '- Dependency packs release: ${{ needs.resolve.outputs.dependency_release_tag }}'
-            echo '- Server core source: ${{ needs.server_prereq.outputs.server_source }}'
-            echo '- Server core tag: ${{ needs.resolve.outputs.tavern_tag }}'
+            echo '- Upstream tag: ${{ needs.plan.outputs.tavern_tag }}'
+            echo '- Build type: ${{ needs.plan.outputs.build_type }}'
+            echo '- Rootfs source: ${{ needs.rootfs_prereq.outputs.source }}'
+            echo '- Dependency source: ${{ needs.dependency_prereq.outputs.source }}'
+            echo '- Server source: ${{ needs.server_prereq.outputs.source }}'
+            echo '- Build source: ${{ needs.build.outputs.source }}'
             echo '- APK asset: ${{ needs.build.outputs.release_asset_name }}'
-            echo '- SHA256: ${{ needs.build.outputs.apk_sha256 }}'
-            echo '- Size bytes: ${{ needs.build.outputs.apk_size_bytes }}'
-            echo '- Workflow: tavern-upstream-apk'
+            echo '- APK SHA256: ${{ needs.build.outputs.apk_sha256 }}'
+            echo '- APK size bytes: ${{ needs.build.outputs.apk_size_bytes }}'
+            echo
+            echo '## 本次更新内容'
+            echo
+
+            if [ '${{ github.event_name }}' = 'push' ] && [ '${{ github.event.before }}' != '0000000000000000000000000000000000000000' ]; then
+              git log --pretty='- %h %s' '${{ github.event.before }}'..'${{ github.sha }}'
+            else
+              git log --pretty='- %h %s' -n 20 HEAD
+            fi
           } > "$release_notes_file"
 
-          if ! gh release view "$release_tag" --repo '${{ github.repository }}' > /dev/null 2>&1; then
-            if [ "$release_prerelease" = 'true' ]; then
-              gh release create "$release_tag" \
+          if ! gh release view '${{ needs.plan.outputs.release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
+            if [ -n "$prerelease_flag" ]; then
+              gh release create '${{ needs.plan.outputs.release_tag }}' \
                 --repo '${{ github.repository }}' \
                 --target '${{ github.sha }}' \
-                --title "$release_title" \
+                --title '${{ needs.plan.outputs.release_title }}' \
                 --notes-file "$release_notes_file" \
                 --prerelease
             else
-              gh release create "$release_tag" \
+              gh release create '${{ needs.plan.outputs.release_tag }}' \
                 --repo '${{ github.repository }}' \
                 --target '${{ github.sha }}' \
-                --title "$release_title" \
+                --title '${{ needs.plan.outputs.release_title }}' \
                 --notes-file "$release_notes_file"
             fi
+          else
+            gh release edit '${{ needs.plan.outputs.release_tag }}' \
+              --repo '${{ github.repository }}' \
+              --title '${{ needs.plan.outputs.release_title }}' \
+              --notes-file "$release_notes_file" > /dev/null
           fi
 
-          gh release edit "$release_tag" \
-            --repo '${{ github.repository }}' \
-            --title "$release_title" \
-            --notes-file "$release_notes_file" > /dev/null
-
-          release_id="$(gh api "/repos/${{ github.repository }}/releases/tags/$release_tag" --jq '.id')"
-          gh api --method PATCH \
-            "/repos/${{ github.repository }}/releases/$release_id" \
-            -f prerelease="$release_prerelease" > /dev/null
-
-      - name: Upload release assets
-        run: |
-          set -euo pipefail
-
-          gh release upload '${{ needs.resolve.outputs.release_tag }}' \
-            artifacts/release/* \
+          gh release upload '${{ needs.plan.outputs.release_tag }}' \
+            "$release_dir"/*.apk \
+            "$release_dir"/*.sha256 \
+            "$release_dir"/*.update.json \
             --repo '${{ github.repository }}' \
             --clobber
 
-      - name: Cleanup publish workspace artifacts
-        if: always()
+      - name: Append publish summary
         run: |
-          set -euo pipefail
-
-          rm -rf "$GITHUB_WORKSPACE/artifacts/release"
+          {
+            echo '### Publish'
+            echo
+            echo '- Release tag: ${{ needs.plan.outputs.release_tag }}'
+            echo '- Release title: ${{ needs.plan.outputs.release_title }}'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stage Contract: 4/4 APK Assembly
+# Responsibilities:
+# - Consume stage-1 runtime image, stage-2 dependency packs, and stage-3 server source.
+# - Compose the final server-payload only inside stage-4 temporary output, inject assets, and assemble the APK.
+# Must not:
+# - Implicitly rebuild or refresh stage-1/stage-2/stage-3 prerequisites.
+# - Move stage-3 responsibilities back into this script's callers or into earlier stages.
+
 runtime_rid='linux-arm64'
 build_type=''
 runtime_image_path=''
 server_package_path=''
 tavern_tag=''
-refresh_runtime_image='0'
-prepare_prerequisites='0'
 dependency_packs_override=''
 default_android_build_root="${STAI_TAVERN_ANDROID_BUILD_ROOT:-${STAI_ANDROID_BUILD_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/stai-tavern-android-build}}"
 
@@ -17,7 +23,6 @@ workspace_android_root="$workspace_root/android-tavern"
 android_root="$(realpath -m "$default_android_build_root/android-project/android-tavern")"
 sync_server_script="$workspace_root/scripts/sync-tavern-android-bootstrap.sh"
 dependency_pack_script="$workspace_root/scripts/build-tavern-dependency-packs.sh"
-runtime_image_script="$workspace_root/scripts/build-tavern-android-runtime-image.sh"
 build_config_path="$workspace_root/stai-build-config.json"
 rootfs_manifest_path="$workspace_android_root/app/src/main/assets/bootstrap/rootfs/rootfs-manifest.json"
 
@@ -45,17 +50,17 @@ source_android_build_common
 
 usage() {
     cat <<'EOF'
-Usage: build-tavern-android-apk.sh [--runtime-image <path>] [--server-package <path> | --tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--build-type debug|release] [--dependency-packs <comma-separated>] [--prepare-prerequisites] [--refresh-runtime-image]
+Usage: build-tavern-android-apk.sh [--runtime-image <path>] [--server-package <path> | --tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--build-type debug|release] [--dependency-packs <comma-separated>]
 
 说明：
-- runtime image / dependency packs 只负责 Termux rootfs、环境依赖、环境修复脚本；server core 只负责 Tavern 源码与 server overlay。
-- Android Host 扩展与默认扩展列表在 APK build 阶段分别写入独立 assets 目录，不再混入 server core。
-- 默认只消费现有 runtime image、server core 与 dependency packs，然后把它们合并进 android-tavern 工程。
-- 若不传 --runtime-image，默认读取 artifacts/android-runtime-images/tavern-android-runtime-<rid>.zip；缺失时会直接报错。
-- 若不传 --server-package，则默认读取 artifacts/validation/android-tavern-server-package/<rid>/server-core.zip，并从 artifacts/validation/android-tavern-dependency-packs/<rid> 组合出最终 server-payload.zip。
+- runtime image / dependency packs 只负责 Termux rootfs、环境依赖、环境修复脚本；server source 只负责 Tavern 源码与 server overlay。
+- Android Host 扩展与默认扩展列表在 APK build 阶段分别写入独立 assets 目录，不再混入 server source。
+- 这是纯 stage 4 脚本，只消费现有 runtime image、server source 与 dependency packs，然后把它们合并进 android-tavern 工程。
+- 若不传 --runtime-image，默认读取 artifacts/releases/rootfs/<rid>/tavern-rootfs-<rid>.zip；缺失时会直接报错。
+- 若不传 --server-package，则默认读取 artifacts/releases/server-source/<rid>/<tag>/server-source.zip，并从 artifacts/releases/dependency-packs/<rid> 组合出最终 server payload。
+- 若显式传 --server-package，则直接把该归档写入 Android 工程，不再读取 dependency packs 目录。
 - 若不传 --build-type，则优先读取仓库根目录 stai-build-config.json 的 build.buildType。
-- `--prepare-prerequisites` 会在本地显式补齐缺失的 runtime image、server core 与 dependency packs；不传时不会隐式触发下载/构建。
-- `--refresh-runtime-image` 会强制重建 runtime image。
+- 缺少前置物料时会直接报错，并提示对应上一阶段命令；不会隐式触发下载或构建。
 EOF
 }
 
@@ -80,14 +85,6 @@ while [[ $# -gt 0 ]]; do
         --tag)
             tavern_tag="$2"
             shift 2
-            ;;
-        --refresh-runtime-image)
-            refresh_runtime_image='1'
-            shift
-            ;;
-        --prepare-prerequisites)
-            prepare_prerequisites='1'
-            shift
             ;;
         --dependency-packs)
             dependency_packs_override="$2"
@@ -269,8 +266,8 @@ resolve_dependency_pack_list() {
         done
 }
 
-server_core_prepare_hint() {
-    printf 'bash ./scripts/sync-tavern-android-bootstrap.sh --runtime-rid %s --tag %s --target-root ./artifacts/validation/android-tavern-server-package/%s --server-core-only' "$runtime_rid" "$tavern_tag" "$runtime_rid"
+server_source_prepare_hint() {
+    printf 'bash ./scripts/sync-tavern-android-bootstrap.sh --runtime-rid %s --tag %s --target-root ./artifacts/releases/server-source/%s/%s' "$runtime_rid" "$tavern_tag" "$runtime_rid" "$tavern_tag"
 }
 
 dependency_packs_prepare_hint() {
@@ -283,7 +280,7 @@ dependency_packs_prepare_hint() {
 }
 
 runtime_image_prepare_hint() {
-    printf 'bash ./scripts/build-tavern-android-runtime-image.sh --runtime-rid %s --output ./artifacts/android-runtime-images/tavern-android-runtime-%s.zip' "$runtime_rid" "$runtime_rid"
+    printf 'bash ./scripts/build-tavern-android-runtime-image.sh --runtime-rid %s --output ./artifacts/releases/rootfs/%s/tavern-rootfs-%s.zip' "$runtime_rid" "$runtime_rid" "$runtime_rid"
 }
 
 input_path_newer_than() {
@@ -298,12 +295,6 @@ input_path_newer_than() {
     fi
 
     [[ "$input_path" -nt "$reference_path" ]]
-}
-
-prepare_server_core_artifact() {
-    local generated_root="$1"
-
-    bash "$sync_server_script" --runtime-rid "$runtime_rid" --tag "$tavern_tag" --target-root "$generated_root" --server-core-only
 }
 
 prepare_staged_android_project() {
@@ -330,32 +321,21 @@ prepare_staged_android_project() {
     fi
 }
 
-prepare_dependency_packs_artifacts() {
-    local dependency_root="$1"
-
-    if [[ -n "$dependency_packs_override" ]]; then
-        bash "$dependency_pack_script" --runtime-rid "$runtime_rid" --target-root "$dependency_root" --include "$dependency_packs_override"
-        return
-    fi
-
-    bash "$dependency_pack_script" --runtime-rid "$runtime_rid" --target-root "$dependency_root"
-}
-
-generated_server_core_satisfy_request() {
+generated_server_source_satisfy_request() {
     local generated_root="$1"
-    local server_core_path="$generated_root/server-core.zip"
-    local server_core_manifest_path="$generated_root/server-core-manifest.json"
+    local server_source_path="$generated_root/server-source.zip"
+    local server_source_manifest_path="$generated_root/server-source-manifest.json"
     local server_overlay_root="$workspace_root/android-tavern/server-overlay"
 
-    [[ -f "$server_core_path" && -f "$server_core_manifest_path" ]] || return 1
+    [[ -f "$server_source_path" && -f "$server_source_manifest_path" ]] || return 1
     command -v python3 >/dev/null 2>&1 || return 1
 
-    if input_path_newer_than "$sync_server_script" "$server_core_manifest_path" \
-        || input_path_newer_than "$server_overlay_root" "$server_core_manifest_path"; then
+    if input_path_newer_than "$sync_server_script" "$server_source_manifest_path" \
+        || input_path_newer_than "$server_overlay_root" "$server_source_manifest_path"; then
         return 1
     fi
 
-    python3 - "$server_core_manifest_path" "$runtime_rid" "$tavern_tag" <<'PY'
+    python3 - "$server_source_manifest_path" "$runtime_rid" "$tavern_tag" <<'PY'
 import json
 import sys
 
@@ -367,7 +347,7 @@ if str(payload.get('runtimeRid') or '').strip() != runtime_rid:
     raise SystemExit(1)
 
 archive_file = str(payload.get('archiveFile') or '').strip()
-if archive_file != 'server-core.zip':
+if archive_file != 'server-source.zip':
     raise SystemExit(1)
 
 manifest_tag = str(payload.get('tag') or payload.get('payloadVersion') or '').strip()
@@ -418,12 +398,12 @@ PY
     return 0
 }
 
-compose_server_package_from_components() {
+compose_server_payload_from_components() {
     local generated_root="$1"
     local dependency_root="$2"
     local output_package_path="$3"
     local compose_root="$(realpath -m "$default_android_build_root/server-compose/$runtime_rid")"
-    local server_core_path="$generated_root/server-core.zip"
+    local server_source_path="$generated_root/server-source.zip"
     local selected_list_path="$compose_root/selected-packs.txt"
     local env_file_path="$compose_root/dependency-env.sh"
     local post_extract_hook_path="$compose_root/dependency-post-extract.sh"
@@ -433,7 +413,7 @@ compose_server_package_from_components() {
     local archive_file
     local -a dependency_pack_names=()
 
-    stai_assert_path_exists "$server_core_path" "缺少 server core 产物：$server_core_path"
+    stai_assert_path_exists "$server_source_path" "缺少 server source 产物：$server_source_path"
     stai_require_command unzip
     stai_ensure_java_home
 
@@ -580,8 +560,8 @@ selection_manifest_path.write_text(
 )
 PY
 
-    stai_progress_stage 2 4 "开始解包 server core"
-    stai_extract_archive_with_progress "$server_core_path" "$compose_root" 'server-core'
+    stai_progress_stage 2 4 "开始解包 server source"
+    stai_extract_archive_with_progress "$server_source_path" "$compose_root" 'server-source'
     while IFS= read -r archive_file; do
         [[ -z "$archive_file" ]] && continue
         stai_log "导入 dependency pack：$archive_file"
@@ -660,38 +640,26 @@ case "$build_type" in
 esac
 
 if [[ -z "$runtime_image_path" ]]; then
-    runtime_image_path="$workspace_root/artifacts/android-runtime-images/tavern-android-runtime-$runtime_rid.zip"
+    runtime_image_path="$workspace_root/artifacts/releases/rootfs/$runtime_rid/tavern-rootfs-$runtime_rid.zip"
 fi
 
 if [[ -z "$server_package_path" ]]; then
-    generated_server_root="$workspace_root/artifacts/validation/android-tavern-server-package/$runtime_rid"
-    dependency_packs_root="$workspace_root/artifacts/validation/android-tavern-dependency-packs/$runtime_rid"
+    generated_server_root="$workspace_root/artifacts/releases/server-source/$runtime_rid/$tavern_tag"
+    dependency_packs_root="$workspace_root/artifacts/releases/dependency-packs/$runtime_rid"
 
-    if ! generated_server_core_satisfy_request "$generated_server_root"; then
-        if [[ "$prepare_prerequisites" != '1' ]]; then
-            stai_fail "缺少可复用的 Tavern server core：$generated_server_root。请先运行 $(server_core_prepare_hint)，或显式传 --prepare-prerequisites。"
-        fi
-
-        stai_progress_stage 1 6 "开始生成 Tavern server core"
-        prepare_server_core_artifact "$generated_server_root"
-    else
-        stai_log "复用已存在的 Tavern server core：$generated_server_root"
+    if ! generated_server_source_satisfy_request "$generated_server_root"; then
+        stai_fail "缺少可复用的 Tavern server source：$generated_server_root。请先运行 $(server_source_prepare_hint)，或显式传 --server-package。"
     fi
+    stai_log "复用已存在的 Tavern server source：$generated_server_root"
 
     if ! dependency_packs_satisfy_request "$dependency_packs_root"; then
-        if [[ "$prepare_prerequisites" != '1' ]]; then
-            stai_fail "缺少可复用的 dependency packs：$dependency_packs_root。请先运行 $(dependency_packs_prepare_hint)，或显式传 --prepare-prerequisites。"
-        fi
-
-        stai_progress_stage 2 6 "开始生成 dependency packs"
-        prepare_dependency_packs_artifacts "$dependency_packs_root"
-    else
-        stai_log "复用已存在的 dependency packs：$dependency_packs_root"
+        stai_fail "缺少可复用的 dependency packs：$dependency_packs_root。请先运行 $(dependency_packs_prepare_hint)，或显式传 --server-package。"
     fi
+    stai_log "复用已存在的 dependency packs：$dependency_packs_root"
 
-    composed_server_package_path="$generated_server_root/server-payload.composed.zip"
-    stai_progress_stage 3 6 "开始组合 Tavern server payload"
-    compose_server_package_from_components "$generated_server_root" "$dependency_packs_root" "$composed_server_package_path"
+    composed_server_package_path="$(realpath -m "$default_android_build_root/server-compose-output/$runtime_rid/$tavern_tag/server-payload.zip")"
+    stai_progress_stage 1 3 "开始组合 Tavern server payload"
+    compose_server_payload_from_components "$generated_server_root" "$dependency_packs_root" "$composed_server_package_path"
     server_package_path="$composed_server_package_path"
 fi
 
@@ -785,28 +753,22 @@ android_build_root="$(realpath -m "$default_android_build_root")"
 apk_output_dir="$android_build_root/app/outputs/apk/$build_type"
 apk_path="$apk_output_dir/app-$build_type.apk"
 apksigner_path="$android_sdk_root/build-tools/$STAI_ANDROID_BUILD_TOOLS_VERSION/apksigner"
-workspace_apk_root="$workspace_root/artifacts/validation/android-tavern"
+workspace_apk_root="$workspace_root/artifacts/releases/android-apk"
 workspace_apk_path="$workspace_apk_root/app-$build_type.apk"
 
 export STAI_TAVERN_ANDROID_BUILD_ROOT="$android_build_root"
 mkdir -p "$workspace_apk_root"
 
-if [[ ! -f "$runtime_image_path" || "$refresh_runtime_image" == '1' ]]; then
-    if [[ ! -f "$runtime_image_path" && "$prepare_prerequisites" != '1' && "$refresh_runtime_image" != '1' ]]; then
-        stai_fail "缺少可复用的 Tavern runtime image：$runtime_image_path。请先运行 $(runtime_image_prepare_hint)，或显式传 --prepare-prerequisites / --refresh-runtime-image。"
-    fi
-
-    stai_progress_stage 4 6 "开始生成 Tavern runtime image"
-    bash "$runtime_image_script" --runtime-rid "$runtime_rid" --output "$runtime_image_path"
-else
-    stai_log "复用 Tavern runtime image：$runtime_image_path"
+if [[ ! -f "$runtime_image_path" ]]; then
+    stai_fail "缺少可复用的 Tavern runtime image：$runtime_image_path。请先运行 $(runtime_image_prepare_hint)，或显式传 --runtime-image。"
 fi
+stai_log "复用 Tavern runtime image：$runtime_image_path"
 
-stai_progress_stage 5 6 "开始把 runtime image 和 server payload 写入缓存 Android 工程"
+stai_progress_stage 2 3 "开始把 runtime image 和 server payload 写入缓存 Android 工程"
 apply_runtime_image "$runtime_image_path" "$android_root"
 apply_server_package "$server_package_path" "$android_root"
 
-stai_progress_stage 6 6 "开始执行 Gradle 任务：$gradle_task"
+stai_progress_stage 3 3 "开始执行 Gradle 任务：$gradle_task"
 (
     cd "$android_root"
     bash "$workspace_root/gradlew" --no-daemon --console=plain -p "$android_root" "$gradle_task"

@@ -7,7 +7,7 @@
 
 这个仓库维护 ST.AI 的 SillyTavern Android 宿主、离线运行时打包链，以及基于指定 SillyTavern tag 的 APK 构建与发布流程。
 
-上游 SillyTavern 源码不会长期作为主工程保存在仓库里；构建时会同步指定 tag，生成宿主使用的 server payload。
+上游 SillyTavern 源码不会长期作为主工程保存在仓库里；构建时会同步指定 tag，先生成 stage 3 的 server source，再由 stage 4 组合宿主使用的最终 server payload。
 
 ## 第三方许可证说明
 
@@ -47,16 +47,20 @@
   Android 宿主工程，应用包名为 `com.stai.sillytavern`。
 - `scripts/android-build-common.sh`
   Android/WSL 构建公共环境脚本。
+- `scripts/resolve-tavern-build-plan.sh`
+  统一解析宿主版本、上游 tag、变更判定、release 命名和 `artifacts/releases/...` 输出路径。
 - `scripts/sync-android-rootfs.sh`
   生成离线 Linux rootfs、proot 及相关运行时资产。
 - `scripts/sync-tavern-android-bootstrap.sh`
-  下载指定 SillyTavern tag，生成 `server-core.zip`；需要时也可配合 dependency packs 产出完整 server payload。
+  下载指定 SillyTavern tag，生成 `server-source.zip`；只包含 Tavern 源码、overlay 和 npm 运行依赖，不包含 dependency packs，也不直接产出最终 server-payload。
 - `scripts/build-tavern-dependency-packs.sh`
   单独构建 `node`、`git` 等 dependency pack zip。
 - `scripts/build-tavern-android-runtime-image.sh`
   生成 Tavern 专用 runtime image 及 metadata。
+- `scripts/build-tavern-android-local.sh`
+  本地一键入口，顺序执行 rootfs、dependency packs、server source、apk 四个阶段。
 - `scripts/build-tavern-android-apk.sh`
-  默认只把现有 runtime image、server core、dependency packs 合并进 `android-tavern/`，组装 debug 或 release APK。
+  当前是阶段 4 脚本，只消费现有 runtime image、server source、dependency packs 组装 debug 或 release APK，不再作为推荐的一键总入口。
 - `.github/workflows/`
   包含 runtime 资产发布与 upstream APK 发布两条工作流。
 
@@ -69,54 +73,57 @@
 
 ## 本地推荐流程
 
-本地推荐先分别准备底包、依赖包、server core，再执行 APK 合并：
+本地一键入口已经切到 `scripts/build-tavern-android-local.sh`。它会先走统一的 build plan，再顺序执行 4 个阶段脚本：rootfs、dependency packs、server source、apk。
 
 ```bash
-bash ./scripts/build-tavern-android-runtime-image.sh \
-  --runtime-rid linux-arm64 \
-  --output ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
-
-bash ./scripts/build-tavern-dependency-packs.sh \
-  --runtime-rid linux-arm64
-
-bash ./scripts/sync-tavern-android-bootstrap.sh \
-  --runtime-rid linux-arm64 \
-  --tag 1.18.0 \
-  --target-root ./artifacts/validation/android-tavern-server-package/linux-arm64 \
-  --server-core-only
-
-bash ./scripts/build-tavern-android-apk.sh \
-  --runtime-rid linux-arm64 \
+bash ./scripts/build-tavern-android-local.sh \
   --build-type debug \
-  --tag 1.18.0
+  --tavern-tag 1.18.0
 ```
 
-如果你确实需要在本地一条命令补齐这些前置产物，可以显式传 `--prepare-prerequisites`：
+推荐把这个脚本视为本地总入口；`scripts/build-tavern-android-apk.sh` 现在只负责第 4 阶段。如果你已经准备好了前置物料，仍然可以直接调用它做最终组装；它不会再隐式补齐 prerequisites。
 
-```bash
-bash ./scripts/build-tavern-android-apk.sh \
-  --runtime-rid linux-arm64 \
-  --build-type debug \
-  --tag 1.18.0 \
-  --prepare-prerequisites
-```
+正常本地打包只需要调用这一条入口；除非你是在排查某个阶段本身，否则不要跳过它直接拼装自己的阶段组合。
+
+每个阶段脚本开头都带有 `Stage Contract` 或 `Build Plan Contract` 注释。后续如果要调整阶段职责，必须先同步修改这些脚本头部契约和本节下方的“四阶段边界”，再改实现。
 
 默认会生成这些产物：
 
-- `./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip`
-- `./artifacts/validation/android-tavern-dependency-packs/linux-arm64/*.zip`
-- `./artifacts/validation/android-tavern-server-package/linux-arm64/server-core.zip`
-- `./artifacts/validation/android-tavern-server-package/linux-arm64/server-payload.composed.zip`
-- `./artifacts/validation/android-tavern/app-debug.apk`
+- `./artifacts/releases/rootfs/linux-arm64/tavern-rootfs-linux-arm64.zip`
+- `./artifacts/releases/dependency-packs/linux-arm64/*.zip`
+- `./artifacts/releases/server-source/linux-arm64/<tag>/server-source.zip`
+- `./artifacts/releases/android-apk/app-debug.apk`
+- `./artifacts/releases/android-apk/stai-sillytavern-android-v<宿主版本>-<上游tag>-<build_type>.apk`
+- `./artifacts/releases/android-apk/stai-sillytavern-android-v<宿主版本>-<上游tag>-<build_type>.apk.sha256`
+- `./artifacts/releases/android-apk/stai-sillytavern-android-v<宿主版本>-<上游tag>-<build_type>.update.json`
+
+注意：`resolve-tavern-build-plan.sh` 在 `--tavern-tag auto/latest` 时会访问 GitHub API 解析最新上游 release tag；release 序号查询在 API 不可用或命中 rate limit 时会自动回落到 `0`。如果本地命中 GitHub rate limit，优先显式传 `--tavern-tag <tag>`。
+
+## 四阶段边界
+
+1. Stage 0 / build plan：`scripts/resolve-tavern-build-plan.sh`
+  只负责解析版本、变更判定、release 命名和统一输出路径；不能下载、构建或修改任何 stage 产物。
+2. Stage 1 / runtime image：`scripts/build-tavern-android-runtime-image.sh`
+  只负责生成 rootfs/runtime image 和 metadata；不能构建 dependency packs、server source 或 APK。
+3. Stage 2 / dependency packs：`scripts/build-tavern-dependency-packs.sh`
+  只负责生成 `node`、`git` 等 dependency pack zip 和 manifest；不能构建 rootfs、server source 或 APK。
+4. Stage 3 / server source：`scripts/sync-tavern-android-bootstrap.sh`
+  只负责同步指定 Tavern tag、安装 npm 运行依赖、应用 overlay，并输出 `server-source.zip` 与 `server-source-manifest.json`；不能打入 dependency packs，也不能生成最终 `server-payload`。
+5. Stage 4 / APK assembly：`scripts/build-tavern-android-apk.sh`
+  只负责消费 stage 1、2、3 的产物，在 stage 4 临时目录里组合最终 `server-payload`，再写入 Android 工程并组装 APK；不能隐式回补前置阶段。
+6. Local one-click：`scripts/build-tavern-android-local.sh`
+  这是正常本地打包入口，只负责按同一套路径与语义依次调用上面 4 个阶段，不允许自己追加一套独立打包逻辑。
 
 ## 分步构建
+
+只有在你需要单独验证某个阶段时，才建议直接调用下面这些单阶段脚本。
 
 1. 生成 Tavern runtime image
 
 ```bash
 bash ./scripts/build-tavern-android-runtime-image.sh \
   --runtime-rid linux-arm64 \
-  --output ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
+  --output ./artifacts/releases/rootfs/linux-arm64/tavern-rootfs-linux-arm64.zip
 ```
 
 2. 生成 dependency packs
@@ -126,14 +133,13 @@ bash ./scripts/build-tavern-dependency-packs.sh \
   --runtime-rid linux-arm64
 ```
 
-3. 生成 Tavern server core
+3. 生成 Tavern server source
 
 ```bash
 bash ./scripts/sync-tavern-android-bootstrap.sh \
   --runtime-rid linux-arm64 \
   --tag 1.18.0 \
-  --target-root ./artifacts/validation/android-tavern-server-package/linux-arm64 \
-  --server-core-only
+  --target-root ./artifacts/releases/server-source/linux-arm64/1.18.0
 ```
 
 4. 组装 Tavern APK
@@ -142,13 +148,13 @@ bash ./scripts/sync-tavern-android-bootstrap.sh \
 bash ./scripts/build-tavern-android-apk.sh \
   --runtime-rid linux-arm64 \
   --build-type debug \
-  --runtime-image ./artifacts/android-runtime-images/tavern-android-runtime-linux-arm64.zip
+  --tag 1.18.0
 ```
 
 5. 安装到设备（可选）
 
 ```powershell
-adb install -r .\artifacts\validation\android-tavern\app-debug.apk
+adb install -r .\artifacts\releases\android-apk\app-debug.apk
 ```
 
 6. 验证真机上的 system git 链路（可选）
@@ -172,9 +178,10 @@ python ./scripts/validate-android-system-git.py
 ## 版本与签名规则
 
 - `android-tavern/gradle.properties` 中的 `staiAndroidHostVersion` 是宿主版本基线，目前为 `1.0.1`。
-- 本地构建默认 `versionName` 规则是 `<宿主版本>+tavern.<上游tag>`，例如 `1.0.1+tavern.1.18.0`。
-- GitHub Actions 会把宿主版本自动计算为 `<基线版本>.<当前仓库提交计数>`，例如 `1.0.1.7`。
-- 工作流里的 `versionCode` 默认使用 UTC epoch 秒，保证 release 构建单调递增。
+- 本地一键脚本和 GitHub Actions 都通过 `scripts/resolve-tavern-build-plan.sh` 统一计算版本。
+- 当前宿主版本规则是 `<基线版本>.<当前仓库提交计数>`，例如 `1.0.1.7`。
+- 当前 `versionName` 规则是 `<宿主版本>+tavern.<上游tag>`，例如 `1.0.1.7+tavern.1.18.0`。
+- 当前 `versionCode` 规则是 `1800000000 + 提交计数 * 1000 + 上游 release 序号`，用于保证对同一宿主版本线的单调递增。
 - 本地和 CI 的 `release` 构建都优先读取 `STAI_ANDROID_RELEASE_*` 环境变量；如果未提供，会回退到仓库内：
   - `android-tavern/app/signing/release.keystore`
   - `android-tavern/app/signing/release-signing.properties`
@@ -189,7 +196,8 @@ python ./scripts/validate-android-system-git.py
 上面这些运行时内容都由脚本在构建时注入，不是长期维护入口。
 
 - `artifacts/tmp/` 下的 upstream payload/source 是临时同步或验证产物，只用于调试与检查，不建议直接编辑。
-- `artifacts/validation/` 下主要存放本地验证产物，例如 APK、server package、UI 截图与 XML dump。
+- `artifacts/releases/` 是当前统一的构建产物根目录：rootfs、dependency packs、server source、android apk 都在这里汇总。
+- `artifacts/validation/` 现在主要保留真机验证产物，例如 UI 截图与 XML dump。
 
 ## GitHub Actions
 
@@ -218,8 +226,11 @@ python ./scripts/validate-android-system-git.py
 - 定时任务每 6 小时检查一次 `SillyTavern/SillyTavern` 最新 GitHub Release tag。
 - 手动触发时可指定 `tavern_tag`、`build_type`、`force_rebuild`、`publish_release`。
 - `push`、定时任务和手动触发默认构建 `release` APK。
-- 如果当前仓库已存在同 upstream tag、同 build type 的 APK release 资产，工作流会自动跳过。
-- 如果本次 `push` 只改动了 runtime 源目录，APK 工作流会先跳过，等 runtime 工作流发布最新 runtime 资产后再自动重触发。
+- 当前 workflow 结构是 `plan -> rootfs_prereq -> dependency_prereq -> server_prereq -> build -> publish`。
+- 其中 `rootfs_prereq`、`dependency_prereq`、`server_prereq` 三个 job 会分别判断当前阶段是 `built` 还是复用已有 GitHub Release 资产。
+- `build` job 只消费 `artifacts/releases/...` 下的前置物料，不再负责隐式准备整套 prerequisites。
+- 如果最终 APK release 已存在，且三个前置阶段都没有重新构建，`build` job 会优先复用现有 release 资产，而不是重新 assemble。
+- `plan` job 负责统一版本、路径和 release 命名；它在 `auto/latest` 模式下也会访问 GitHub API 解析最新上游 tag。
 
 APK 工作流会额外产出：
 
@@ -231,6 +242,9 @@ APK 工作流会额外产出：
 
 ### Release 命名规则
 
+- Rootfs release tag：`tavern-rootfs-linux-arm64`
+- Dependency packs release tag：`tavern-dependency-packs-linux-arm64`
+- Server source release tag：`tavern-server-source-linux-arm64-<上游tag>`
 - APK release tag：`stai-sillytavern-v<宿主版本>-<上游tag>-<build_type>`
 - APK 资产名：`stai-sillytavern-android-v<宿主版本>-<上游tag>-<build_type>.apk`
 

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stage Contract: 1/4 Runtime Image
+# Responsibilities:
+# - Produce only the reusable runtime image/rootfs artifact and its metadata.
+# - Write stage-1 outputs to artifacts/releases/rootfs/<rid>/...
+# Must not:
+# - Build dependency packs.
+# - Sync Tavern server source.
+# - Compose final server-payload or assemble the APK.
+
 runtime_rid='linux-arm64'
 output_path=''
 artifact_name=''
@@ -169,11 +178,11 @@ case "$runtime_rid" in
 esac
 
 if [[ -z "$output_path" ]]; then
-    output_path="$workspace_root/artifacts/android-runtime-images/tavern-android-runtime-$runtime_rid.zip"
+    output_path="$workspace_root/artifacts/releases/rootfs/$runtime_rid/tavern-rootfs-$runtime_rid.zip"
 fi
 
 if [[ -z "$artifact_name" ]]; then
-    artifact_name="tavern-android-runtime-image-$runtime_rid"
+    artifact_name="tavern-rootfs-$runtime_rid"
 fi
 
 output_path="$(realpath -m "$output_path")"

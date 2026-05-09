@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stage Contract: 3/4 Server Source
+# Responsibilities:
+# - Sync the requested SillyTavern tag, install npm runtime dependencies, and apply server overlay.
+# - Produce only server-source.zip and server-source-manifest.json under artifacts/releases/server-source/<rid>/<tag>.
+# Must not:
+# - Build dependency packs.
+# - Compose the final server-payload.
+# - Assemble the APK or mutate stage-1/stage-2 outputs.
+
 runtime_rid="linux-arm64"
-server_core_only='0'
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/.." && pwd)"
-target_root="$workspace_root/artifacts/validation/android-tavern-server-package/$runtime_rid"
+target_root=''
 working_root="${STAI_TAVERN_ANDROID_BOOTSTRAP_WORK_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/stai-tavern-android-bootstrap}"
 server_overlay_root="$workspace_root/android-tavern/server-overlay"
 build_config_path="$workspace_root/stai-build-config.json"
@@ -107,12 +115,13 @@ source_android_build_common
 
 usage() {
     cat <<'EOF'
-Usage: sync-tavern-android-bootstrap.sh [--tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--target-root <path>] [--working-root <path>] [--server-core-only]
+Usage: sync-tavern-android-bootstrap.sh [--tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--target-root <path>] [--working-root <path>]
 
 说明：
 - 未传 --tag 时优先读取仓库根目录 stai-build-config.json 的 build.tavernVersion。
 - build.tavernVersion 为 latest 或 auto 时，会自动解析上游最新 GitHub Release tag。
-- 传 --server-core-only 时只生成 Tavern server core；其中只包含 Tavern 源码与 server overlay，不包含 APK 侧 bundled extensions。
+- 默认输出目录为 artifacts/releases/server-source/<rid>/<tag>。
+- 该脚本只生成 Tavern server source；其中包含 Tavern 源码、overlay 和 npm 运行依赖，不包含 node/git dependency packs，也不生成最终 server-payload。
 EOF
 }
 
@@ -133,10 +142,6 @@ while [[ $# -gt 0 ]]; do
         --working-root)
             working_root="$2"
             shift 2
-            ;;
-        --server-core-only)
-            server_core_only='1'
-            shift
             ;;
         --help|-h)
             usage
@@ -161,6 +166,10 @@ case "${STAI_TAVERN_TAG,,}" in
         STAI_TAVERN_TAG="$(resolve_latest_tavern_tag)"
         ;;
 esac
+
+if [[ -z "$target_root" ]]; then
+    target_root="$workspace_root/artifacts/releases/server-source/$runtime_rid/$STAI_TAVERN_TAG"
+fi
 
 case "$runtime_rid" in
     linux-arm64)
@@ -192,9 +201,6 @@ resolved_working_root="$(realpath -m "$working_root")"
 downloads_root="$resolved_working_root/downloads"
 source_root="$resolved_working_root/source"
 payload_root="$resolved_working_root/payload"
-legacy_payload_root="$resolved_working_root/payload-legacy"
-dependency_packs_root="$resolved_target_root/dependency-packs"
-dependency_pack_script="$workspace_root/scripts/build-tavern-dependency-packs.sh"
 archive_name="sillytavern-${STAI_TAVERN_TAG}.tar.gz"
 source_archive_path="$downloads_root/$archive_name"
 source_archive_url="https://github.com/SillyTavern/SillyTavern/archive/refs/tags/${STAI_TAVERN_TAG}.tar.gz"
@@ -202,18 +208,15 @@ source_archive_url="https://github.com/SillyTavern/SillyTavern/archive/refs/tags
 mkdir -p "$downloads_root" "$resolved_target_root"
 stai_download_file_if_missing "$source_archive_url" "$source_archive_path"
 
-rm -rf "$source_root" "$payload_root" "$legacy_payload_root" "$dependency_packs_root"
+rm -rf "$source_root" "$payload_root"
 mkdir -p "$source_root"
-if [[ "$server_core_only" != '1' ]]; then
-    mkdir -p "$legacy_payload_root" "$dependency_packs_root"
-fi
 stai_extract_archive_with_progress "$source_archive_path" "$source_root" 'sillytavern-source'
 resolved_source_root="$(find "$source_root" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
 stai_assert_path_exists "$resolved_source_root/package.json" "SillyTavern 源码解压失败：$source_archive_path"
 payload_root="$resolved_source_root"
 
 # 在构建机上提前安装运行依赖并裁掉 devDependencies，避免 Android 设备首次启动时再联网安装 npm 包。
-stai_progress_stage 1 5 "开始安装 Tavern 运行依赖（npm omit=dev）"
+stai_progress_stage 1 3 "开始安装 Tavern 运行依赖（npm omit=dev）"
 (
     cd "$resolved_source_root"
     npm_cache_dir="$(stai_toolchain_root)/npm-cache"
@@ -242,7 +245,7 @@ stai_progress_stage 1 5 "开始安装 Tavern 运行依赖（npm omit=dev）"
         exit 1
     fi
 )
-stai_progress_stage 2 5 "Tavern 运行依赖安装完成"
+stai_progress_stage 2 3 "Tavern 运行依赖安装完成"
 
 rm -rf "$payload_root/data" "$payload_root/backups"
 
@@ -251,48 +254,6 @@ if [[ -d "$server_overlay_root" ]]; then
 fi
 
 patch_android_default_config "$payload_root/default/config.yaml"
-
-if [[ "$server_core_only" != '1' ]]; then
-    stai_progress_stage 3 5 "开始构建 dependency packs"
-    bash "$dependency_pack_script" \
-        --runtime-rid "$runtime_rid" \
-        --target-root "$dependency_packs_root" \
-        --working-root "$resolved_working_root/dependency-packs-build"
-
-    node_manifest_path="$dependency_packs_root/node.manifest.json"
-    stai_assert_path_exists "$node_manifest_path" "缺少 node dependency manifest：$node_manifest_path"
-
-    mapfile -t dependency_pack_rows < <(python3 - "$dependency_packs_root" <<'PY'
-import json
-import pathlib
-import sys
-
-dependency_root = pathlib.Path(sys.argv[1])
-for manifest_path in sorted(dependency_root.glob('*.manifest.json')):
-    payload = json.loads(manifest_path.read_text(encoding='utf-8'))
-    name = str(payload.get('name') or '').strip()
-    archive_file = str(payload.get('archiveFile') or '').strip()
-    if not name or not archive_file:
-        continue
-    print(f"{name}\t{archive_file}\t{manifest_path.name}")
-PY
-)
-
-    if [[ "${#dependency_pack_rows[@]}" -eq 0 ]]; then
-        stai_fail "未生成任何 dependency pack manifest：$dependency_packs_root"
-    fi
-
-    dependency_pack_names=()
-    dependency_pack_archives=()
-    dependency_pack_manifests=()
-    for dependency_pack_row in "${dependency_pack_rows[@]}"; do
-        IFS=$'\t' read -r dependency_pack_name dependency_pack_archive dependency_pack_manifest <<< "$dependency_pack_row"
-        dependency_pack_names+=("$dependency_pack_name")
-        dependency_pack_archives+=("$dependency_pack_archive")
-        dependency_pack_manifests+=("$dependency_pack_manifest")
-        stai_assert_path_exists "$dependency_packs_root/$dependency_pack_archive" "缺少 dependency pack：$dependency_packs_root/$dependency_pack_archive"
-    done
-fi
 
 cat > "$payload_root/tavern-entrypoint.sh" <<'EOF'
 #!/bin/sh
@@ -321,7 +282,7 @@ rm -rf public/scripts/extensions/third-party
 ln -sfn "$TAVERN_DATA_ROOT/extensions" public/scripts/extensions/third-party
 
 if [ -f ./dependency-env.sh ]; then
-    # dependency-env.sh 由打包阶段根据 dependency manifests 聚合生成。
+    # dependency-env.sh 由 stage 4 根据 dependency manifests 聚合生成。
     # shellcheck disable=SC1091
     . ./dependency-env.sh
 fi
@@ -350,98 +311,26 @@ chmod +x "$payload_root/tavern-entrypoint.sh"
 
 jar_path="$JAVA_HOME/bin/jar"
 stai_assert_path_exists "$jar_path" "缺少 jar 命令：$jar_path"
-server_core_archive_path="$resolved_target_root/server-core.zip"
-server_core_manifest_path="$resolved_target_root/server-core-manifest.json"
-server_archive_path="$resolved_target_root/server-payload.zip"
-manifest_path="$resolved_target_root/bootstrap-manifest.json"
-component_index_path="$resolved_target_root/component-index.json"
+server_source_archive_path="$resolved_target_root/server-source.zip"
+server_source_manifest_path="$resolved_target_root/server-source-manifest.json"
 mapfile -t packaged_files < <(find "$payload_root" -type f -printf '%P\n' | LC_ALL=C sort)
-rm -f "$server_core_archive_path" "$server_core_manifest_path" "$server_archive_path" "$manifest_path" "$component_index_path"
-stai_progress_stage 4 5 "开始归档 server core"
-"$jar_path" --create --file "$server_core_archive_path" --no-manifest -C "$payload_root" .
-server_core_archive_size_bytes="$(stat -c '%s' "$server_core_archive_path")"
+rm -f "$server_source_archive_path" "$server_source_manifest_path"
+stai_progress_stage 3 3 "开始归档 Tavern server source"
+"$jar_path" --create --file "$server_source_archive_path" --no-manifest -C "$payload_root" .
+server_source_archive_size_bytes="$(stat -c '%s' "$server_source_archive_path")"
 
 {
     printf '{\n'
-    printf '  "package": "%s",\n' "$(json_escape "SillyTavernServerCore")"
+    printf '  "package": "%s",\n' "$(json_escape "SillyTavernServerSource")"
     printf '  "payloadVersion": "%s",\n' "$(json_escape "$STAI_TAVERN_TAG")"
     printf '  "runtimeRid": "%s",\n' "$(json_escape "$runtime_rid")"
     printf '  "tag": "%s",\n' "$(json_escape "$STAI_TAVERN_TAG")"
     printf '  "sourceArchive": "%s",\n' "$(json_escape "$archive_name")"
     printf '  "syncedAtUtc": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    printf '  "archiveFile": "%s",\n' "$(json_escape "$(basename "$server_core_archive_path")")"
+    printf '  "archiveFile": "%s",\n' "$(json_escape "$(basename "$server_source_archive_path")")"
     printf '  "archivedFileCount": %s,\n' "${#packaged_files[@]}"
-    printf '  "archiveSizeBytes": %s\n' "$server_core_archive_size_bytes"
+    printf '  "archiveSizeBytes": %s\n' "$server_source_archive_size_bytes"
     printf '}\n'
-} > "$server_core_manifest_path"
+} > "$server_source_manifest_path"
 
-if [[ "$server_core_only" != '1' ]]; then
-    rm -rf "$legacy_payload_root"
-    mkdir -p "$legacy_payload_root"
-    stai_extract_archive_with_progress "$server_core_archive_path" "$legacy_payload_root" 'server-core'
-    for dependency_pack_archive in "${dependency_pack_archives[@]}"; do
-        stai_extract_archive_with_progress "$dependency_packs_root/$dependency_pack_archive" "$legacy_payload_root" "$dependency_pack_archive"
-    done
-
-    rm -f "$server_archive_path"
-    stai_progress_stage 5 5 "开始归档 legacy server payload"
-    "$jar_path" --create --file "$server_archive_path" --no-manifest -C "$legacy_payload_root" .
-    server_archive_size_bytes="$(stat -c '%s' "$server_archive_path")"
-    payload_version="$STAI_TAVERN_TAG"
-    if [[ -n "$STAI_NODE_VERSION" ]]; then
-        payload_version="$payload_version+node.$STAI_NODE_VERSION"
-    fi
-
-    {
-        printf '{\n'
-        printf '  "package": "%s",\n' "$(json_escape "SillyTavern")"
-        printf '  "payloadVersion": "%s",\n' "$(json_escape "$payload_version")"
-        printf '  "runtimeRid": "%s",\n' "$(json_escape "$runtime_rid")"
-        printf '  "tag": "%s",\n' "$(json_escape "$STAI_TAVERN_TAG")"
-        printf '  "nodeVersion": "%s",\n' "$(json_escape "$STAI_NODE_VERSION")"
-        printf '  "sourceArchive": "%s",\n' "$(json_escape "$archive_name")"
-        printf '  "syncedAtUtc": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        printf '  "archiveFile": "%s",\n' "$(json_escape "$(basename "$server_archive_path")")"
-        printf '  "serverCoreArchiveFile": "%s",\n' "$(json_escape "$(basename "$server_core_archive_path")")"
-        printf '  "defaultDependencyPacks": ['
-        for index in "${!dependency_pack_names[@]}"; do
-            if [[ "$index" -gt 0 ]]; then
-                printf ', '
-            fi
-            printf '"%s"' "$(json_escape "${dependency_pack_names[$index]}")"
-        done
-        printf '],\n'
-        printf '  "archivedFileCount": %s,\n' "${#packaged_files[@]}"
-        printf '  "archiveSizeBytes": %s\n' "$server_archive_size_bytes"
-        printf '}\n'
-    } > "$manifest_path"
-
-    {
-        printf '{\n'
-        printf '  "runtimeRid": "%s",\n' "$(json_escape "$runtime_rid")"
-        printf '  "generatedAtUtc": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-        printf '  "serverCore": {"archiveFile": "%s", "manifestFile": "%s"},\n' \
-            "$(json_escape "$(basename "$server_core_archive_path")")" \
-            "$(json_escape "$(basename "$server_core_manifest_path")")"
-        printf '  "dependencyPacks": [\n'
-        for index in "${!dependency_pack_names[@]}"; do
-            suffix=','
-            if [[ "$index" -eq $((${#dependency_pack_names[@]} - 1)) ]]; then
-                suffix=''
-            fi
-            printf '    {"name": "%s", "archiveFile": "%s", "manifestFile": "%s"}%s\n' \
-                "$(json_escape "${dependency_pack_names[$index]}")" \
-                "$(json_escape "${dependency_pack_archives[$index]}")" \
-                "$(json_escape "${dependency_pack_manifests[$index]}")" \
-                "$suffix"
-        done
-        printf '  ]\n'
-        printf '}\n'
-    } > "$component_index_path"
-fi
-
-if [[ "$server_core_only" == '1' ]]; then
-    printf 'Packed %s tavern files for tag %s into %s\n' "${#packaged_files[@]}" "$STAI_TAVERN_TAG" "$server_core_archive_path"
-else
-    printf 'Packed %s tavern files for tag %s into %s\n' "${#packaged_files[@]}" "$STAI_TAVERN_TAG" "$server_archive_path"
-fi
+printf 'Packed %s tavern files for tag %s into %s\n' "${#packaged_files[@]}" "$STAI_TAVERN_TAG" "$server_source_archive_path"

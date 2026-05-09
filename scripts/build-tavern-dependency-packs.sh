@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stage Contract: 2/4 Dependency Packs
+# Responsibilities:
+# - Produce only reusable dependency pack archives and manifests.
+# - Write stage-2 outputs to artifacts/releases/dependency-packs/<rid>/...
+# Must not:
+# - Build the runtime image/rootfs.
+# - Sync Tavern server source.
+# - Compose final server-payload or assemble the APK.
+
 runtime_rid='linux-arm64'
 include_packs='node,git'
 include_explicit='0'
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workspace_root="$(cd "$script_dir/.." && pwd)"
-target_root="$workspace_root/artifacts/validation/android-tavern-dependency-packs/$runtime_rid"
+target_root="$workspace_root/artifacts/releases/dependency-packs/$runtime_rid"
 working_root="${STAI_TAVERN_ANDROID_DEPENDENCY_PACKS_WORK_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/stai-tavern-dependency-packs}"
 build_config_path="$workspace_root/stai-build-config.json"
 ubuntu_ports_base_url='https://ports.ubuntu.com/ubuntu-ports'
@@ -66,7 +75,7 @@ usage() {
 Usage: build-tavern-dependency-packs.sh [--runtime-rid linux-arm64] [--target-root <path>] [--working-root <path>] [--include <comma-separated>]
 
 说明：
-- 依赖包输出目录默认为 artifacts/validation/android-tavern-dependency-packs/<rid>。
+- 依赖包输出目录默认为 artifacts/releases/dependency-packs/<rid>。
 - 未传 --include 时，优先读取 stai-build-config.json 的 build.includeDependencyPacks；为空则默认 node,git。
 EOF
 }
