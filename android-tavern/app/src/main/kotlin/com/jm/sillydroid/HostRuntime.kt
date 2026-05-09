@@ -148,10 +148,16 @@ internal data class HostPaths(
 }
 
 internal class AssetExtractor(private val context: Context) {
+    companion object {
+        // extractBootstrap 可能被多个协程并发调用（设置页 loadConfiguration + extensionsCoordinator.initialize），
+        // 必须串行化以避免对同一目录的并发写入导致 AssertionError / IOException。
+        private val extractLock = Any()
+    }
+
     fun extractBootstrap(
         paths: HostPaths,
         onProgress: (message: String, details: String, progressPercent: Int) -> Unit = { _, _, _ -> }
-    ) {
+    ) = synchronized(extractLock) {
         onProgress(
             "正在准备宿主工作目录。",
             "正在创建 bootstrap、data 和日志目录。",
@@ -336,7 +342,11 @@ internal class AssetExtractor(private val context: Context) {
         }
 
         if (targetDirectory.exists()) {
-            targetDirectory.deleteRecursively()
+            if (targetDirectory.isDirectory) {
+                targetDirectory.deleteRecursively()
+            } else {
+                targetDirectory.delete()
+            }
         }
         targetDirectory.mkdirs()
         return true
@@ -404,7 +414,11 @@ internal class AssetExtractor(private val context: Context) {
         onProgress: (processedEntries: Int, totalEntries: Int) -> Unit = { _, _ -> }
     ) {
         if (targetDirectory.exists()) {
-            targetDirectory.deleteRecursively()
+            if (targetDirectory.isDirectory) {
+                targetDirectory.deleteRecursively()
+            } else {
+                targetDirectory.delete()
+            }
         }
         targetDirectory.mkdirs()
 
@@ -430,9 +444,22 @@ internal class AssetExtractor(private val context: Context) {
                     }
 
                     if (entry.isDirectory) {
-                        outputFile.mkdirs()
+                        if (outputFile.exists() && !outputFile.isDirectory) {
+                            outputFile.deleteRecursively()
+                        }
+                        if (!outputFile.exists() && !outputFile.mkdirs()) {
+                            throw BootstrapException("创建目录失败：$relativePath")
+                        }
                     } else {
-                        outputFile.parentFile?.mkdirs()
+                        val parentDirectory = outputFile.parentFile
+                        if (parentDirectory != null) {
+                            if (parentDirectory.exists() && !parentDirectory.isDirectory) {
+                                parentDirectory.deleteRecursively()
+                            }
+                            if (!parentDirectory.exists() && !parentDirectory.mkdirs()) {
+                                throw BootstrapException("创建文件父目录失败：$relativePath")
+                            }
+                        }
                         outputFile.outputStream().use { output ->
                             zipInput.copyTo(output)
                         }

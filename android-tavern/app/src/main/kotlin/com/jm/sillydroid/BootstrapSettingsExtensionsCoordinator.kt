@@ -234,16 +234,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
         renderExtensions()
         renderProgress()
-        
-        activity.lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    val paths = HostPaths.from(activity)
-                    AssetExtractor(activity).extractBootstrap(paths) { _, _, _ -> }
-                }
-            }
-            reloadExtensions()
-        }
+        reloadExtensions()
     }
 
     fun reloadExtensions() {

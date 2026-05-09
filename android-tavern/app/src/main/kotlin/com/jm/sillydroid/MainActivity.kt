@@ -341,7 +341,14 @@ class MainActivity : AppCompatActivity() {
                         longPressRunnable = Runnable {
                             if (!dragging && !longPressTriggered) {
                                 longPressTriggered = true
-                                openBootstrapSettings()
+                                val phase = StartupRuntimeStore.state.value.phase
+                                val settingsAllowedPhases = setOf(
+                                    StartupPhase.PAUSING, StartupPhase.CONFIGURING,
+                                    StartupPhase.ERROR, StartupPhase.BLOCKED
+                                )
+                                if (phase in settingsAllowedPhases) {
+                                    openBootstrapSettings()
+                                }
                             }
                         }.also { runnable ->
                             view.postDelayed(runnable, ViewConfiguration.getLongPressTimeout().toLong())
@@ -1879,8 +1886,15 @@ class MainActivity : AppCompatActivity() {
         }
         bootstrapProgress.isVisible = !state.canRetry && state.phase != StartupPhase.CONFIGURING
         bootstrapProgressLabel.isVisible = bootstrapProgress.isVisible
+        // 解包/启动进行中时禁用设置入口，避免并发读写文件目录导致崩溃。
+        // IDLE 表示从未解包过（全新安装），此时 server 目录不存在，也不允许打开设置。
+        // 只有解包完成后处于静止状态（等待配置、出错、被阻塞）时才允许打开设置。
+        val settingsAllowedPhases = setOf(
+            StartupPhase.PAUSING, StartupPhase.CONFIGURING,
+            StartupPhase.ERROR, StartupPhase.BLOCKED
+        )
         bootstrapSettingsButton.isVisible = !state.isReady
-        bootstrapSettingsButton.isEnabled = !state.isReady && !isOpeningBootstrapSettings
+        bootstrapSettingsButton.isEnabled = !state.isReady && !isOpeningBootstrapSettings && state.phase in settingsAllowedPhases
         bootstrapProgress.max = 100
         val progressPercent = state.progressPercent.coerceIn(0, 100)
         bootstrapProgress.isIndeterminate = progressPercent <= 0

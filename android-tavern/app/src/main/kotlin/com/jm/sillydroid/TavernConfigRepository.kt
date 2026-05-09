@@ -62,16 +62,16 @@ internal class TavernConfigRepository(context: Context) {
 
     fun ensureUserConfigFile(): File {
         val paths = HostPaths.from(appContext)
-        AssetExtractor(appContext).extractBootstrap(paths)
-        paths.ensureWorkingDirectories()
         val configDirectory = File(paths.serverDataDir, "config")
         val configFile = File(configDirectory, "config.yaml")
         if (!configFile.isFile) {
-            configDirectory.mkdirs()
             val defaultConfigFile = resolveDefaultConfigFile(paths)
             if (!defaultConfigFile.isFile) {
-                throw BootstrapException("缺少默认 Tavern 配置模板：${defaultConfigFile.absolutePath}")
+                // 环境尚未初始化（server 尚未解包），不在此处触发 extractBootstrap，
+                // 交由 StartupCoordinatorService 负责初始化流程。
+                throw BootstrapException("Tavern 环境尚未初始化，请先完成启动流程再打开设置。")
             }
+            configDirectory.mkdirs()
             defaultConfigFile.copyTo(configFile, overwrite = true)
         }
         return configFile
@@ -145,7 +145,6 @@ internal class TavernConfigRepository(context: Context) {
 
     private fun loadDefaultConfigRoot(): LinkedHashMap<String, Any?> {
         val paths = HostPaths.from(appContext)
-        AssetExtractor(appContext).extractBootstrap(paths)
         val defaultConfigFile = resolveDefaultConfigFile(paths)
         if (!defaultConfigFile.isFile) {
             throw BootstrapException("缺少默认 Tavern 配置模板：${defaultConfigFile.absolutePath}")
