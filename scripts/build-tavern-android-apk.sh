@@ -347,17 +347,19 @@ prepare_staged_android_project() {
     local staged_root="$2"
 
     rm -rf "$staged_root"
-    mkdir -p "$(dirname "$staged_root")"
-    cp -R "$source_root" "$(dirname "$staged_root")/"
+    mkdir -p "$staged_root"
 
-    rm -rf \
-        "$staged_root/.gradle" \
-        "$staged_root/app/build" \
-        "$staged_root/app/src/main/assets/bootstrap/bundled-extensions" \
-        "$staged_root/app/src/main/assets/bootstrap/default-extensions" \
-        "$staged_root/app/src/main/assets/bootstrap/rootfs" \
-        "$staged_root/app/src/main/assets/bootstrap/server" \
-        "$staged_root/app/src/main/jniLibs/arm64-v8a"
+    sillydroid_log "正在导出 Android 工程源码到缓存目录..."
+    if git -C "$source_root" rev-parse --is-inside-work-tree &>/dev/null; then
+        # 仅导出仓库源码文件（git tracked），并保留工作区当前内容（含未提交改动）。
+        (
+            cd "$source_root"
+            git ls-files -z | tar --null -T - -cf -
+        ) | tar -xf - -C "$staged_root"
+    else
+        cp -R "$source_root" "$(dirname "$staged_root")/"
+        rm -rf "$staged_root/.git"
+    fi
 
     if [[ -f "$build_config_path" ]]; then
         cp -f "$build_config_path" "$staged_root/sillydroid-build-config.json"

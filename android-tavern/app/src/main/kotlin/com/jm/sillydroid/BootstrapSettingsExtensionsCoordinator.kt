@@ -232,7 +232,16 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
         renderExtensions()
         renderProgress()
-        reloadExtensions()
+        
+        activity.lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val paths = HostPaths.from(activity)
+                    AssetExtractor(activity).extractBootstrap(paths) { _, _, _ -> }
+                }
+            }
+            reloadExtensions()
+        }
     }
 
     fun reloadExtensions() {
@@ -537,17 +546,23 @@ internal class BootstrapSettingsExtensionsCoordinator(
             }
         }
 
+        val bundledReinstallSource = findBundledReinstallSource(extension)
+        val isHostExtension = extension.folderName.contains("android-host", ignoreCase = true)
         val reinstallButton = createActionIconButton(
             iconResId = R.drawable.ic_restore_defaults,
             contentDescriptionResId = R.string.bootstrap_settings_extensions_reinstall
         ) {
-            if (extension.homePage.isNullOrBlank()) {
+            if (bundledReinstallSource != null) {
+                confirmReinstallBundled(extension, bundledReinstallSource)
+            } else if (isHostExtension) {
+                confirmReinstallHost(extension)
+            } else if (extension.homePage.isNullOrBlank()) {
                 showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_missing))
             } else {
                 confirmReinstall(extension)
             }
         }.apply {
-            isEnabled = !busy && !extension.homePage.isNullOrBlank()
+            isEnabled = !busy && (bundledReinstallSource != null || isHostExtension || !extension.homePage.isNullOrBlank())
         }
         actionsRow.addView(reinstallButton)
 
@@ -597,6 +612,44 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 reinstallExtension(extension)
             }
             .show()
+    }
+
+    private fun confirmReinstallBundled(extension: ManagedExtension, bundledSource: BundledExtension) {
+        val message = activity.getString(
+            R.string.bootstrap_settings_extensions_reinstall_confirm_message,
+            extension.displayName
+        ) + "\n\n" + "该扩展将使用 APK 内置版本覆盖安装（不走 URL 拉取）。"
+
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_extensions_reinstall_confirm_title)
+            .setMessage(message)
+            .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+            .setPositiveButton(R.string.bootstrap_settings_extensions_reinstall) { _, _ ->
+                reinstallBundledExtension(extension, bundledSource)
+            }
+            .show()
+    }
+
+    private fun confirmReinstallHost(extension: ManagedExtension) {
+        // 查找 bundled-extensions 中的任何 host 类扩展
+        val hostBundled = bundledExtensions.firstOrNull { it.category.equals("host", ignoreCase = true) }
+        if (hostBundled != null) {
+            confirmReinstallBundled(extension, hostBundled)
+        } else {
+            val message = activity.getString(
+                R.string.bootstrap_settings_extensions_reinstall_confirm_message,
+                extension.displayName
+            ) + "\n\n" + "APK 内未找到内置版本，将尝试从文件重装。"
+
+            MaterialAlertDialogBuilder(activity)
+                .setTitle(R.string.bootstrap_settings_extensions_reinstall_confirm_title)
+                .setMessage(message)
+                .setNegativeButton(R.string.bootstrap_settings_import_confirm_cancel, null)
+                .setPositiveButton(R.string.bootstrap_settings_extensions_reinstall) { _, _ ->
+                    reinstallExtension(extension)
+                }
+                .show()
+        }
     }
 
     private fun createActionIconButton(
@@ -712,6 +765,11 @@ internal class BootstrapSettingsExtensionsCoordinator(
     }
 
     private fun reinstallExtension(extension: ManagedExtension) {
+        findBundledReinstallSource(extension)?.let { bundledSource ->
+            reinstallBundledExtension(extension, bundledSource)
+            return
+        }
+
         val repositoryUrl = extension.homePage ?: run {
             showError(activity.getString(R.string.bootstrap_settings_extensions_homepage_missing))
             return
@@ -757,6 +815,65 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
                 reloadExtensions()
             }
+        }
+    }
+
+    private fun reinstallBundledExtension(extension: ManagedExtension, bundledSource: BundledExtension) {
+        activity.lifecycleScope.launch {
+            setProgressState(
+                actionLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_action_reinstall),
+                stageLabel = activity.getString(R.string.bootstrap_settings_extensions_progress_stage_updating),
+                percent = null,
+                indeterminate = true
+            )
+            setBusyState(true)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val extensionsRoot = File(paths.serverDataDir, "extensions")
+                    val targetDirectory = File(extensionsRoot, bundledSource.folderName)
+                    extensionsRoot.mkdirs()
+                    if (extension.folderName != bundledSource.folderName) {
+                        val legacyDirectory = File(extensionsRoot, extension.folderName)
+                        if (legacyDirectory.exists()) {
+                            legacyDirectory.deleteRecursively()
+                        }
+                    }
+                    if (targetDirectory.exists()) {
+                        targetDirectory.deleteRecursively()
+                    }
+                    if (!bundledSource.sourceDirectory.copyRecursively(targetDirectory, overwrite = true)) {
+                        throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
+                    }
+                }
+            }
+            setBusyState(false)
+            clearProgressState()
+
+            result.onSuccess {
+                val message = if (extension.folderName == bundledSource.folderName) {
+                    activity.getString(R.string.bootstrap_settings_extensions_reinstall_success, extension.displayName)
+                } else {
+                    activity.getString(R.string.bootstrap_settings_extensions_reinstall_success, extension.displayName) +
+                        "\n\n" + "已迁移到 ${bundledSource.folderName}。"
+                }
+                showBanner(message)
+                showMessage(message)
+                onTavernUiReloadRequired()
+                reloadExtensions()
+            }.onFailure { exception ->
+                showError(exception.message ?: activity.getString(R.string.bootstrap_settings_extensions_reinstall_failed))
+                reloadExtensions()
+            }
+        }
+    }
+
+    private fun findBundledReinstallSource(extension: ManagedExtension): BundledExtension? {
+        return bundledExtensions.firstOrNull { bundled ->
+            bundled.category.equals("host", ignoreCase = true) &&
+                (
+                    bundled.displayName.equals(extension.displayName, ignoreCase = true) ||
+                        bundled.folderName.equals(extension.folderName, ignoreCase = true)
+                )
         }
     }
 

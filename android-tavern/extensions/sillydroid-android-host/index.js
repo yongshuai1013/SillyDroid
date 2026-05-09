@@ -1,21 +1,76 @@
-import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
-import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
-import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { Popup, POPUP_TYPE } from '../../../popup.js';
+import { extension_settings } from '../../../extensions.js';
+import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 
-const bridgeName = 'SillyDroidAndroidHostBridge';
-const menuButtonId = 'sillydroid_android_host_menu_button';
+const extensionName = 'sillydroid-android-host';
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const settingsPanelId = 'sillydroid_android_host_settings_panel';
 const popupTitle = '安卓宿主';
 
-let slashCommandsRegistered = false;
-let bootstrapScheduled = false;
+const defaultSettings = {
+    enableFloatingBubble: false,
+    enableNotification: false,
+};
+
+let notificationPushHandler = null;
+
+function getExtensionSettings() {
+    extension_settings[extensionName] = extension_settings[extensionName] || {};
+    const settings = extension_settings[extensionName];
+
+    for (const [key, value] of Object.entries(defaultSettings)) {
+        if (settings[key] === undefined) {
+            settings[key] = value;
+        }
+    }
+
+    return settings;
+}
+
+function saveExtensionSetting(key, value) {
+    const settings = getExtensionSettings();
+    settings[key] = value;
+    saveSettingsDebounced();
+}
 
 function getBridge() {
-    const bridge = globalThis[bridgeName];
+    const bridge = globalThis.SillyDroidAndroidHostBridge;
     if (!bridge || typeof bridge.getHostVersionInfo !== 'function') {
         return null;
     }
 
     return bridge;
+}
+
+function getNativeNotificationBridge() {
+    const bridge = globalThis.AndroidSystemNotificationBridge;
+    if (!bridge || typeof bridge.showNotification !== 'function') {
+        return null;
+    }
+
+    return bridge;
+}
+
+function getMessageEventBinding() {
+    if (!eventSource || !event_types || !event_types.MESSAGE_RECEIVED) {
+        return null;
+    }
+
+    return {
+        source: eventSource,
+        messageReceived: event_types.MESSAGE_RECEIVED,
+    };
+}
+
+function formatVersionSummary(info) {
+    if (!info) {
+        return '安卓宿主桥不可用';
+    }
+
+    const hostVersion = String(info.hostVersion || 'unknown');
+    const apkVersionName = String(info.apkVersionName || 'unknown');
+    const apkVersionCode = String(info.apkVersionCode || 'unknown');
+    return `宿主 ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})`;
 }
 
 function getHostVersionInfo() {
@@ -32,360 +87,365 @@ function getHostVersionInfo() {
     }
 }
 
-function showBridgeUnavailableToast() {
-    toastr.warning('当前页面无法连接安卓宿主桥。', popupTitle);
-}
+function openVersionPopup() {
+    const info = getHostVersionInfo();
+    const content = document.createElement('div');
+    content.style.display = 'flex';
+    content.style.flexDirection = 'column';
+    content.style.gap = '10px';
 
-function formatVersionSummary(info) {
-    if (!info) {
-        return '安卓宿主桥不可用';
+    const description = document.createElement('p');
+    description.style.margin = '0';
+    description.textContent = info
+        ? '这里展示安卓宿主版本和 APK 版本信息。'
+        : '当前页面无法连接安卓宿主桥。';
+    content.appendChild(description);
+
+    if (info) {
+        const versionLine = document.createElement('div');
+        versionLine.textContent = formatVersionSummary(info);
+        content.appendChild(versionLine);
+
+        const serviceLine = document.createElement('div');
+        serviceLine.textContent = info.serverReady ? '本地服务：运行中' : '本地服务：启动中或已暂停';
+        content.appendChild(serviceLine);
     }
 
-    const hostVersion = String(info.hostVersion || 'unknown');
-    const apkVersionName = String(info.apkVersionName || 'unknown');
-    const apkVersionCode = String(info.apkVersionCode || 'unknown');
-    return `宿主 ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})`;
+    const popup = new Popup(content, POPUP_TYPE.TEXT, '', {
+        okButton: '关闭',
+        cancelButton: false,
+    });
+
+    void popup.show();
 }
 
 async function openSettingsCommand() {
     const bridge = getBridge();
     if (!bridge || typeof bridge.openSettings !== 'function') {
-        showBridgeUnavailableToast();
-        return '安卓宿主桥不可用';
+        toastr.warning('当前页面无法连接安卓宿主桥。', popupTitle);
+        return;
     }
 
     const opened = bridge.openSettings() === true;
     if (opened) {
         toastr.success('正在打开宿主设置。', popupTitle);
-        return '正在打开宿主设置';
+    } else {
+        toastr.warning('宿主设置已在打开中。', popupTitle);
     }
-
-    toastr.warning('宿主设置已在打开中。', popupTitle);
-    return '宿主设置已在打开中';
 }
 
-async function setLogsBubbleEnabled(enabled) {
+function handleMessageReceivedForPush() {
+    const bridge = getNativeNotificationBridge();
+    if (!bridge) {
+        return;
+    }
+
+    bridge.showNotification(JSON.stringify({
+        notificationId: `st-message-${Date.now()}`,
+        title: 'SillyTavern',
+        body: '您收到了新消息',
+    }));
+}
+
+function attachNotificationPushListener() {
+    if (notificationPushHandler) {
+        return;
+    }
+
+    const binding = getMessageEventBinding();
+    if (!binding) {
+        return;
+    }
+
+    notificationPushHandler = handleMessageReceivedForPush;
+    binding.source.on(binding.messageReceived, notificationPushHandler);
+}
+
+function detachNotificationPushListener() {
+    if (!notificationPushHandler) {
+        return;
+    }
+
+    const binding = getMessageEventBinding();
+    if (binding) {
+        binding.source.removeListener(binding.messageReceived, notificationPushHandler);
+    }
+
+    notificationPushHandler = null;
+}
+
+async function setNotificationPushEnabled(enabled) {
+    if (enabled) {
+        const bridge = getNativeNotificationBridge();
+        if (!bridge) {
+            toastr.warning('安卓通知桥不可用，请确认应用版本。', popupTitle);
+            return { updated: false };
+        }
+
+        if (typeof bridge.permissionState === 'function' && bridge.permissionState() !== 'granted') {
+            if (typeof bridge.requestPermission === 'function') {
+                bridge.requestPermission();
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 600));
+
+            if (typeof bridge.permissionState === 'function' && bridge.permissionState() !== 'granted') {
+                toastr.warning('尚未获得通知权限，请在系统设置中允许通知后再试。', popupTitle);
+                return { updated: false };
+            }
+        }
+    }
+
+    saveExtensionSetting('enableNotification', enabled);
+
+    if (enabled) {
+        attachNotificationPushListener();
+        toastr.success('已开启消息推送通知。', popupTitle);
+    } else {
+        detachNotificationPushListener();
+        toastr.info('已关闭消息推送通知。', popupTitle);
+    }
+
+    return { updated: true };
+}
+
+async function setFloatingBubbleEnabled(enabled) {
     const bridge = getBridge();
     if (!bridge || typeof bridge.setFloatingLogsBubbleEnabled !== 'function') {
-        showBridgeUnavailableToast();
-        return {
-            updated: false,
-            summary: '安卓宿主桥不可用',
-        };
+        toastr.warning('安卓悬浮球桥不可用，请确认应用版本。', popupTitle);
+        return { updated: false };
     }
 
     const updated = bridge.setFloatingLogsBubbleEnabled(enabled) === true;
     if (!updated) {
-        const failedMessage = enabled ? '暂时无法启用调试日志球。' : '暂时无法关闭调试日志球。';
-        toastr.warning(failedMessage, popupTitle);
-        return {
-            updated: false,
-            summary: failedMessage,
-        };
+        toastr.warning(enabled ? '暂时无法启用悬浮球。' : '暂时无法关闭悬浮球。', popupTitle);
+        return { updated: false };
     }
 
-    const info = getHostVersionInfo();
-    const message = enabled ? '已启用调试日志球。' : '已关闭调试日志球。';
-    if (enabled) {
-        toastr.success(message, popupTitle);
-    } else {
-        toastr.info(message, popupTitle);
+    saveExtensionSetting('enableFloatingBubble', enabled);
+    toastr[enabled ? 'success' : 'info'](enabled ? '已启用悬浮球。' : '已关闭悬浮球。', popupTitle);
+    return { updated: true };
+}
+
+function buildSettingsPanel() {
+    const settings = getExtensionSettings();
+    const existingPanel = document.getElementById(settingsPanelId);
+    if (existingPanel) {
+        return existingPanel;
     }
 
-    return {
-        updated: true,
-        summary: info ? formatVersionSummary(info) : message,
-    };
-}
-
-async function showLogsBubbleCommand() {
-    const result = await setLogsBubbleEnabled(true);
-    return result.summary;
-}
-
-async function showVersionCommand() {
-    const info = getHostVersionInfo();
-    const summary = formatVersionSummary(info);
-    if (info) {
-        toastr.info(summary, popupTitle);
-    } else {
-        showBridgeUnavailableToast();
-    }
-    return summary;
-}
-
-function buildInfoRow(label, value) {
-    const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.flexDirection = 'column';
-    row.style.gap = '4px';
-
-    const title = document.createElement('strong');
-    title.textContent = label;
-    row.appendChild(title);
-
-    const body = document.createElement('span');
-    body.textContent = value;
-    row.appendChild(body);
-
-    return row;
-}
-
-function applySwitchVisualState(toggle, knob, enabled) {
-    toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
-    toggle.style.background = enabled ? '#0f766e' : 'rgba(15, 118, 110, 0.18)';
-    toggle.style.borderColor = enabled ? '#0f766e' : 'rgba(15, 118, 110, 0.18)';
-    knob.style.transform = enabled ? 'translateX(18px)' : 'translateX(0)';
-}
-
-function buildSwitchRow(initialChecked) {
-    const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.alignItems = 'center';
-    row.style.justifyContent = 'space-between';
-    row.style.gap = '12px';
-    row.style.padding = '8px 10px';
-    row.style.border = '1px solid rgba(15, 118, 110, 0.18)';
-    row.style.borderRadius = '12px';
-    row.style.background = 'rgba(15, 118, 110, 0.08)';
-
-    const textGroup = document.createElement('div');
-    textGroup.style.display = 'flex';
-    textGroup.style.flexDirection = 'column';
-    textGroup.style.gap = '4px';
-    textGroup.style.flex = '1';
-
-    const title = document.createElement('strong');
-    title.textContent = '调试日志球';
-    textGroup.appendChild(title);
-
-    const summary = document.createElement('span');
-    summary.textContent = '打开后会在主界面右下角显示调试日志球，点击即可展开实时日志。';
-    summary.style.fontSize = '0.92em';
-    summary.style.opacity = '0.82';
-    textGroup.appendChild(summary);
-
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.setAttribute('role', 'switch');
-    toggle.style.position = 'relative';
-    toggle.style.width = '44px';
-    toggle.style.height = '26px';
-    toggle.style.flexShrink = '0';
-    toggle.style.border = '1px solid rgba(15, 118, 110, 0.18)';
-    toggle.style.borderRadius = '999px';
-    toggle.style.padding = '0';
-    toggle.style.cursor = 'pointer';
-    toggle.style.transition = 'background 160ms ease, border-color 160ms ease, opacity 160ms ease';
-
-    const knob = document.createElement('span');
-    knob.style.position = 'absolute';
-    knob.style.top = '3px';
-    knob.style.left = '3px';
-    knob.style.width = '18px';
-    knob.style.height = '18px';
-    knob.style.borderRadius = '999px';
-    knob.style.background = '#ffffff';
-    knob.style.boxShadow = '0 1px 3px rgba(15, 23, 42, 0.24)';
-    knob.style.transition = 'transform 160ms ease';
-    toggle.appendChild(knob);
-
-    let checked = initialChecked;
-    applySwitchVisualState(toggle, knob, checked);
-
-    toggle.addEventListener('click', async () => {
-        const requestedEnabled = !checked;
-        toggle.disabled = true;
-        toggle.style.opacity = '0.72';
-        applySwitchVisualState(toggle, knob, requestedEnabled);
-        try {
-            const result = await setLogsBubbleEnabled(requestedEnabled);
-            if (!result.updated) {
-                applySwitchVisualState(toggle, knob, checked);
-                return;
-            }
-            checked = requestedEnabled;
-        } catch (error) {
-            console.error('安卓宿主：切换调试日志球失败', error);
-            applySwitchVisualState(toggle, knob, checked);
-            toastr.error('切换调试日志球失败。', popupTitle);
-        } finally {
-            toggle.disabled = false;
-            toggle.style.opacity = '1';
-        }
-    });
-
-    row.appendChild(textGroup);
-    row.appendChild(toggle);
-    return row;
-}
-
-function buildPopupContent(info) {
     const wrapper = document.createElement('div');
-    wrapper.style.display = 'flex';
-    wrapper.style.flexDirection = 'column';
-    wrapper.style.gap = '12px';
+    wrapper.classList.add('inline-drawer');
+    wrapper.id = settingsPanelId;
 
-    const description = document.createElement('p');
-    description.style.margin = '0';
-    description.textContent = info
-        ? '这里可以直接查看宿主版本、打开宿主设置，并即时切换调试日志球。'
-        : '当前页面无法连接安卓宿主桥。';
-    wrapper.appendChild(description);
+    const header = document.createElement('div');
+    header.classList.add('inline-drawer-toggle', 'inline-drawer-header');
 
-    if (!info) {
-        return wrapper;
-    }
+    const title = document.createElement('b');
+    title.textContent = popupTitle;
+    header.appendChild(title);
 
-    wrapper.appendChild(buildInfoRow('宿主版本', String(info.hostVersion || 'unknown')));
-    wrapper.appendChild(
-        buildInfoRow(
-            'APK 版本',
-            `${String(info.apkVersionName || 'unknown')} (${String(info.apkVersionCode || 'unknown')})`
-        )
-    );
-    wrapper.appendChild(buildSwitchRow(info.floatingLogBubbleEnabled === true));
-    wrapper.appendChild(
-        buildInfoRow(
-            '本地服务',
-            info.serverReady ? '运行中' : '启动中或已暂停'
-        )
-    );
+    const icon = document.createElement('div');
+    icon.classList.add('inline-drawer-icon', 'fa-solid', 'fa-circle-chevron-down', 'down');
+    header.appendChild(icon);
 
+    const content = document.createElement('div');
+    content.classList.add('inline-drawer-content');
+
+    const intro = document.createElement('div');
+    intro.style.display = 'flex';
+    intro.style.flexDirection = 'column';
+    intro.style.gap = '4px';
+    intro.style.marginBottom = '12px';
+
+    const introTitle = document.createElement('strong');
+    introTitle.textContent = '安卓宿主扩展设置';
+    intro.appendChild(introTitle);
+
+    const introText = document.createElement('span');
+    introText.textContent = '这里提供悬浮球、消息通知、打开设置和版本说明。';
+    introText.style.opacity = '0.82';
+    intro.appendChild(introText);
+
+    const versionSummary = document.createElement('div');
+    versionSummary.id = 'sillydroid_android_host_version_summary';
+    versionSummary.style.marginBottom = '12px';
+    versionSummary.style.opacity = '0.92';
+    versionSummary.textContent = formatVersionSummary(getHostVersionInfo());
+
+    const bubbleRow = document.createElement('label');
+    bubbleRow.classList.add('checkbox_label');
+    bubbleRow.style.display = 'flex';
+    bubbleRow.style.alignItems = 'center';
+    bubbleRow.style.gap = '8px';
+    bubbleRow.style.marginBottom = '8px';
+
+    const bubbleToggle = document.createElement('input');
+    bubbleToggle.id = 'sillydroid_android_host_floating_bubble';
+    bubbleToggle.type = 'checkbox';
+    bubbleToggle.checked = settings.enableFloatingBubble === true;
+
+    const bubbleText = document.createElement('span');
+    bubbleText.textContent = '启用悬浮球';
+    bubbleRow.appendChild(bubbleToggle);
+    bubbleRow.appendChild(bubbleText);
+
+    const notificationRow = document.createElement('label');
+    notificationRow.classList.add('checkbox_label');
+    notificationRow.style.display = 'flex';
+    notificationRow.style.alignItems = 'center';
+    notificationRow.style.gap = '8px';
+    notificationRow.style.marginBottom = '12px';
+
+    const notificationToggle = document.createElement('input');
+    notificationToggle.id = 'sillydroid_android_host_notification';
+    notificationToggle.type = 'checkbox';
+    notificationToggle.checked = settings.enableNotification === true;
+
+    const notificationText = document.createElement('span');
+    notificationText.textContent = '启用消息通知';
+    notificationRow.appendChild(notificationToggle);
+    notificationRow.appendChild(notificationText);
+
+    const actionRow = document.createElement('div');
+    actionRow.style.display = 'flex';
+    actionRow.style.flexWrap = 'nowrap';
+    actionRow.style.alignItems = 'center';
+    actionRow.style.gap = '8px';
+
+    const openSettingsButton = document.createElement('button');
+    openSettingsButton.classList.add('menu_button');
+    openSettingsButton.type = 'button';
+    openSettingsButton.id = 'sillydroid_android_host_open_settings';
+    openSettingsButton.textContent = '打开设置';
+    openSettingsButton.style.whiteSpace = 'nowrap';
+    openSettingsButton.style.minWidth = '96px';
+    openSettingsButton.style.display = 'inline-flex';
+    openSettingsButton.style.justifyContent = 'center';
+
+    const versionButton = document.createElement('button');
+    versionButton.classList.add('menu_button');
+    versionButton.type = 'button';
+    versionButton.id = 'sillydroid_android_host_version_info';
+    versionButton.textContent = '版本说明';
+    versionButton.style.whiteSpace = 'nowrap';
+    versionButton.style.minWidth = '96px';
+    versionButton.style.display = 'inline-flex';
+    versionButton.style.justifyContent = 'center';
+
+    actionRow.appendChild(openSettingsButton);
+    actionRow.appendChild(versionButton);
+
+    content.appendChild(intro);
+    content.appendChild(versionSummary);
+    content.appendChild(bubbleRow);
+    content.appendChild(notificationRow);
+    content.appendChild(actionRow);
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(content);
     return wrapper;
 }
 
-async function openAndroidHostPopup() {
-    const info = getHostVersionInfo();
-    const popup = new Popup(buildPopupContent(info), POPUP_TYPE.TEXT, '', {
-        okButton: '关闭',
-        cancelButton: false,
-        customButtons: info ? [
-            {
-                text: '打开宿主设置',
-                result: POPUP_RESULT.CUSTOM1,
-                icon: 'fa-sliders',
-            },
-        ] : null,
-    });
+function syncSettingsPanel() {
+    const settings = getExtensionSettings();
+    const bubbleToggle = document.getElementById('sillydroid_android_host_floating_bubble');
+    const notificationToggle = document.getElementById('sillydroid_android_host_notification');
+    const versionSummary = document.getElementById('sillydroid_android_host_version_summary');
 
-    const result = await popup.show();
-    if (result === POPUP_RESULT.CUSTOM1) {
-        await openSettingsCommand();
+    if (bubbleToggle instanceof HTMLInputElement) {
+        bubbleToggle.checked = settings.enableFloatingBubble === true;
+    }
+
+    if (notificationToggle instanceof HTMLInputElement) {
+        notificationToggle.checked = settings.enableNotification === true;
+    }
+
+    if (versionSummary instanceof HTMLElement) {
+        versionSummary.textContent = formatVersionSummary(getHostVersionInfo());
     }
 }
 
-function addMenuButton() {
-    if (document.getElementById(menuButtonId)) {
-        return;
+function bindSettingsPanelEvents() {
+    const bubbleToggle = document.getElementById('sillydroid_android_host_floating_bubble');
+    const notificationToggle = document.getElementById('sillydroid_android_host_notification');
+    const openSettingsButton = document.getElementById('sillydroid_android_host_open_settings');
+    const versionButton = document.getElementById('sillydroid_android_host_version_info');
+
+    if (bubbleToggle instanceof HTMLInputElement && !bubbleToggle.dataset.sillydroidBound) {
+        bubbleToggle.dataset.sillydroidBound = 'true';
+        bubbleToggle.addEventListener('change', async () => {
+            const result = await setFloatingBubbleEnabled(bubbleToggle.checked);
+            if (!result.updated) {
+                bubbleToggle.checked = getExtensionSettings().enableFloatingBubble === true;
+            }
+        });
     }
 
-    const menu = document.getElementById('extensionsMenu');
-    if (!(menu instanceof HTMLElement)) {
-        window.setTimeout(addMenuButton, 500);
-        return;
+    if (notificationToggle instanceof HTMLInputElement && !notificationToggle.dataset.sillydroidBound) {
+        notificationToggle.dataset.sillydroidBound = 'true';
+        notificationToggle.addEventListener('change', async () => {
+            const result = await setNotificationPushEnabled(notificationToggle.checked);
+            if (!result.updated) {
+                notificationToggle.checked = getExtensionSettings().enableNotification === true;
+            }
+        });
     }
 
-    const button = document.createElement('div');
-    button.id = menuButtonId;
-    button.classList.add('list-group-item', 'flex-container', 'flexGap5');
+    if (openSettingsButton instanceof HTMLButtonElement && !openSettingsButton.dataset.sillydroidBound) {
+        openSettingsButton.dataset.sillydroidBound = 'true';
+        openSettingsButton.addEventListener('click', () => {
+            void openSettingsCommand();
+        });
+    }
 
-    const icon = document.createElement('div');
-    icon.classList.add('fa-solid', 'fa-mobile-screen-button', 'extensionsMenuExtensionButton');
-    button.appendChild(icon);
-
-    const text = document.createElement('span');
-    text.textContent = popupTitle;
-    button.appendChild(text);
-
-    button.addEventListener('click', () => {
-        openAndroidHostPopup();
-    });
-
-    menu.appendChild(button);
+    if (versionButton instanceof HTMLButtonElement && !versionButton.dataset.sillydroidBound) {
+        versionButton.dataset.sillydroidBound = 'true';
+        versionButton.addEventListener('click', openVersionPopup);
+    }
 }
 
-function registerSlashCommands() {
-    if (slashCommandsRegistered) {
+async function ensureSettingsPanel() {
+    const root = document.getElementById('extensions_settings') || document.getElementById('extensions_settings2');
+    if (!(root instanceof HTMLElement)) {
+        window.setTimeout(ensureSettingsPanel, 500);
         return;
     }
 
-    slashCommandsRegistered = true;
-
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'android-host',
-        callback: async () => {
-            await openAndroidHostPopup();
-            return formatVersionSummary(getHostVersionInfo());
-        },
-        returns: '安卓宿主版本摘要',
-        helpString: `
-            <div>
-                打开安卓宿主弹窗，查看版本信息并执行快捷操作。
-            </div>
-        `,
-    }));
-
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'android-host-settings',
-        callback: openSettingsCommand,
-        returns: '状态消息',
-        helpString: `
-            <div>
-                不停止 Tavern，直接打开安卓宿主设置页。
-            </div>
-        `,
-    }));
-
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'android-host-logs',
-        callback: showLogsBubbleCommand,
-        returns: '状态消息',
-        helpString: `
-            <div>
-                启用并显示安卓调试日志球。
-            </div>
-        `,
-    }));
-
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'android-host-version',
-        callback: showVersionCommand,
-        returns: '安卓宿主版本摘要',
-        helpString: `
-            <div>
-                显示当前安卓宿主和 APK 版本信息。
-            </div>
-        `,
-    }));
-}
-
-function bootstrapHostExtensionUi() {
-    registerSlashCommands();
-    addMenuButton();
-}
-
-function scheduleHostExtensionBootstrap() {
-    if (bootstrapScheduled) {
+    const existingPanel = document.getElementById(settingsPanelId);
+    if (existingPanel) {
+        // 如果 panel 已存在但不在正确容器内，移回来
+        if (!root.contains(existingPanel)) {
+            root.appendChild(existingPanel);
+        }
+        syncSettingsPanel();
+        bindSettingsPanelEvents();
         return;
     }
 
-    bootstrapScheduled = true;
-    const run = () => {
-        bootstrapHostExtensionUi();
-    };
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', run, { once: true });
-        window.setTimeout(run, 500);
-        return;
+    try {
+        const panel = buildSettingsPanel();
+        root.appendChild(panel);
+        syncSettingsPanel();
+        bindSettingsPanelEvents();
+    } catch (error) {
+        console.error('安卓宿主：加载设置面板失败', error);
     }
-
-    window.setTimeout(run, 0);
 }
 
-scheduleHostExtensionBootstrap();
+async function init() {
+    const settings = getExtensionSettings();
+    if (settings.enableNotification && !notificationPushHandler) {
+        attachNotificationPushListener();
+    }
+
+    await ensureSettingsPanel();
+}
 
 export async function activate() {
-    bootstrapHostExtensionUi();
+    await init();
 }
+
+jQuery(() => {
+    void init();
+});

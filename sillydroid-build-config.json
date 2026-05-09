@@ -24,11 +24,6 @@
       "displayName": "LittleWhiteBox",
       "repositoryUrl": "https://github.com/RT15548/LittleWhiteBox",
       "description": "Workflow and utility toolbox"
-    },
-    {
-      "displayName": "Silly Tavern Reminder",
-      "repositoryUrl": "https://github.com/Mooooooon/silly-tavern-reminder",
-      "description": "Reminder extension"
     }
   ]
 }
