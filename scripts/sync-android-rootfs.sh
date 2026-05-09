@@ -43,7 +43,6 @@ termux_bootstrap_packages=(
 termux_base_packages=(
     git
     nodejs-lts
-    npm
 )
 
 source "$workspace_root/scripts/android-build-common.sh"
@@ -63,7 +62,6 @@ config_path = pathlib.Path(sys.argv[1])
 default = [
     "git",
     "nodejs-lts",
-    "npm",
 ]
 
 if not config_path.exists():
@@ -440,6 +438,7 @@ install_termux_host_prefix_wrappers() {
     local prefix_root="$1"
     local npm_cli_relative_path='lib/node_modules/npm/bin/npm-cli.js'
     local npx_cli_relative_path='lib/node_modules/npm/bin/npx-cli.js'
+    local corepack_npm_cli_relative_path='lib/node_modules/corepack/dist/npm.js'
 
     mkdir -p "$prefix_root/bin"
 
@@ -451,6 +450,14 @@ prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
 exec "\$prefix_root/bin/node" "\$prefix_root/$npm_cli_relative_path" "\$@"
 EOF
         chmod 0755 "$prefix_root/bin/npm"
+    elif [[ -f "$prefix_root/$corepack_npm_cli_relative_path" ]]; then
+    cat > "$prefix_root/bin/npm" <<EOF
+#!/bin/sh
+set -eu
+prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
+exec "\$prefix_root/bin/node" "\$prefix_root/$corepack_npm_cli_relative_path" "\$@"
+EOF
+    chmod 0755 "$prefix_root/bin/npm"
     fi
 
     if [[ -f "$prefix_root/$npx_cli_relative_path" ]]; then
@@ -459,6 +466,14 @@ EOF
 set -eu
 prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
 exec "\$prefix_root/bin/node" "\$prefix_root/$npx_cli_relative_path" "\$@"
+EOF
+        chmod 0755 "$prefix_root/bin/npx"
+    elif [[ -f "$prefix_root/$corepack_npm_cli_relative_path" ]]; then
+        cat > "$prefix_root/bin/npx" <<EOF
+#!/bin/sh
+set -eu
+prefix_root="\${PREFIX:-$termux_guest_runtime_prefix}"
+exec "\$prefix_root/bin/node" "\$prefix_root/$corepack_npm_cli_relative_path" exec --yes -- "\$@"
 EOF
         chmod 0755 "$prefix_root/bin/npx"
     fi

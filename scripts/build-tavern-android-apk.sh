@@ -110,7 +110,7 @@ configured_tavern_tag="$(read_build_config_value 'build.tavernVersion' 'latest')
 
 read_termux_packages_from_config() {
     if ! command -v python3 >/dev/null 2>&1; then
-        printf 'git\nnodejs-lts\nnpm\nnano\nbash\ndash\ncoreutils\nfindutils\ngrep\nsed\ngawk\ntar\ngzip\nxz-utils\nwhich\nca-certificates\n'
+        printf 'git\nnodejs-lts\nnano\nbash\ndash\ncoreutils\nfindutils\ngrep\nsed\ngawk\ntar\ngzip\nxz-utils\nwhich\nca-certificates\n'
         return
     fi
 
@@ -123,7 +123,6 @@ config_path = pathlib.Path(sys.argv[1])
 default = [
     "git",
     "nodejs-lts",
-    "npm",
 ]
 
 if not config_path.exists():
