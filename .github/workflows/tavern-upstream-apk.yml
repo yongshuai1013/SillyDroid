@@ -43,6 +43,7 @@ on:
     - cron: '17 */6 * * *'
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -304,8 +305,44 @@ jobs:
 
           dependency_dir="$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
           source='built'
+          enabled='true'
 
           mkdir -p "$dependency_dir"
+
+            enabled="$(python3 - <<'PY'
+            import json
+            import pathlib
+
+            config_path = pathlib.Path('stai-build-config.json')
+            if not config_path.exists():
+              print('true')
+              raise SystemExit(0)
+
+            try:
+              payload = json.loads(config_path.read_text(encoding='utf-8'))
+            except Exception:
+              print('true')
+              raise SystemExit(0)
+
+            value = (((payload or {}).get('build') or {}).get('includeDependencyPacks'))
+            if value is None or not isinstance(value, list):
+              print('true')
+              raise SystemExit(0)
+
+            normalized = [str(item).strip() for item in value if str(item).strip()]
+            print('true' if normalized else 'false')
+            PY
+          )"
+
+          printf 'enabled=%s\n' "$enabled" >> "$GITHUB_OUTPUT"
+
+          if [ "$enabled" != 'true' ]; then
+            rm -rf "$dependency_dir"
+            mkdir -p "$dependency_dir"
+            source='disabled'
+            printf 'source=%s\n' "$source" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ '${{ needs.plan.outputs.force_rebuild }}' != 'true' ] && [ '${{ needs.plan.outputs.dependency_changed }}' != 'true' ]; then
             if gh release view '${{ needs.plan.outputs.dependency_release_tag }}' --repo '${{ github.repository }}' > /dev/null 2>&1; then
@@ -335,6 +372,7 @@ jobs:
             --target-root "$GITHUB_WORKSPACE/${{ needs.plan.outputs.dependency_release_dir }}"
 
       - name: Verify dependency prerequisite files
+        if: steps.resolve.outputs.source != 'disabled'
         run: |
           set -euo pipefail
 
@@ -378,6 +416,7 @@ jobs:
             --clobber
 
       - name: Upload dependency artifact
+        if: steps.resolve.outputs.source != 'disabled'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.plan.outputs.dependency_release_tag }}
@@ -390,8 +429,11 @@ jobs:
             echo '### Dependency prerequisite'
             echo
             echo '- Source: ${{ steps.resolve.outputs.source }}'
+            echo '- Enabled: ${{ steps.resolve.outputs.enabled }}'
             echo '- Release tag: ${{ needs.plan.outputs.dependency_release_tag }}'
-            echo '- Index: ${{ needs.plan.outputs.dependency_index_name }}'
+            if [ '${{ steps.resolve.outputs.source }}' != 'disabled' ]; then
+              echo '- Index: ${{ needs.plan.outputs.dependency_index_name }}'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   server_prereq:
@@ -669,7 +711,7 @@ jobs:
           path: ${{ needs.plan.outputs.rootfs_release_dir }}
 
       - name: Download dependency artifact
-        if: steps.resolve.outputs.source == 'built'
+        if: steps.resolve.outputs.source == 'built' && needs.dependency_prereq.outputs.source != 'disabled'
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.plan.outputs.dependency_release_tag }}
@@ -877,3 +919,30 @@ jobs:
             echo '- Release tag: ${{ needs.plan.outputs.release_tag }}'
             echo '- Release title: ${{ needs.plan.outputs.release_title }}'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup_artifacts:
+    needs:
+      - plan
+      - rootfs_prereq
+      - dependency_prereq
+      - server_prereq
+      - build
+      - publish
+    if: needs.plan.outputs.publish_release == 'true' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Delete workflow artifacts
+        run: |
+          set -euo pipefail
+
+          mapfile -t artifact_ids < <(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate --jq '.artifacts[].id')
+
+          if [ "${#artifact_ids[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          for artifact_id in "${artifact_ids[@]}"; do
+            gh api repos/${{ github.repository }}/actions/artifacts/${artifact_id} -X DELETE > /dev/null
+          done
