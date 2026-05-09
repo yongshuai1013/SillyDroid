@@ -28,8 +28,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.net.URL
 import java.nio.file.Files
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import com.google.android.material.R as MaterialR
 
@@ -1765,11 +1767,17 @@ internal class BootstrapSettingsExtensionsCoordinator(
         repository: NormalizedExtensionRepository,
         onProgress: ((ExtensionRuntimeProgress) -> Unit)? = null
     ) {
+        validateRemoteManifestBeforeClone(repository)
         val requestName = "extension-reinstall-${folderName.replace(Regex("[^A-Za-z0-9._-]"), "_")}"
+        val maintenanceRoot = File(paths.serverDataDir, ".sillydroid-maintenance")
+        maintenanceRoot.mkdirs()
+        val tempHostDir = File(maintenanceRoot, "$requestName-repo")
+        val tempGuestDir = "/tavern/data/.sillydroid-maintenance/${tempHostDir.name}"
         val environment = mutableMapOf(
             "APP_DATA_ROOT" to paths.serverDataDir.absolutePath,
             "SILLYDROID_EXTENSION_TARGET_DIR" to "/tavern/data/extensions/$folderName",
-            "SILLYDROID_EXTENSION_REPO_URL" to repository.cloneUrl
+            "SILLYDROID_EXTENSION_REPO_URL" to repository.cloneUrl,
+            "SILLYDROID_EXTENSION_TEMP_DIR" to tempGuestDir
         )
         repository.branch?.let { branch ->
             environment["SILLYDROID_EXTENSION_REPO_BRANCH"] = branch
@@ -1871,6 +1879,7 @@ internal class BootstrapSettingsExtensionsCoordinator(
         normalizedRepository: NormalizedExtensionRepository,
         onProgress: ((ExtensionRuntimeProgress) -> Unit)? = null
     ): ExtensionInstallPreview {
+        validateRemoteManifestBeforeClone(normalizedRepository)
         val previewId = System.currentTimeMillis()
         val requestName = "extension-install-preview-$previewId"
         val maintenanceRoot = File(paths.serverDataDir, ".sillydroid-maintenance")
@@ -2391,6 +2400,165 @@ internal class BootstrapSettingsExtensionsCoordinator(
         }
     }
 
+    private fun validateRemoteManifestBeforeClone(repository: NormalizedExtensionRepository) {
+        val candidates = buildRemoteManifestCandidates(repository)
+        if (candidates.isEmpty()) {
+            return
+        }
+
+        val branchHint = candidates.joinToString(separator = ", ") { candidate -> candidate.branch }
+        var hadAnyHttpSuccess = false
+        var hadAnyNotFound = false
+
+        for (candidate in candidates) {
+            val fetchResult = runCatching { fetchTextWithStatus(candidate.url) }.getOrNull() ?: continue
+            when {
+                fetchResult.first in 200..299 -> {
+                    hadAnyHttpSuccess = true
+                    validateManifestJson(fetchResult.second)
+                    return
+                }
+                fetchResult.first == 404 -> hadAnyNotFound = true
+            }
+        }
+
+        if (!hadAnyHttpSuccess && hadAnyNotFound) {
+            throw BootstrapException(
+                activity.getString(
+                    R.string.bootstrap_settings_extensions_install_manifest_precheck_missing,
+                    branchHint
+                )
+            )
+        }
+    }
+
+    private fun validateManifestJson(rawJson: String) {
+        val payload = runCatching { JSONObject(rawJson) }
+            .getOrElse {
+                throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_install_manifest_precheck_invalid))
+            }
+        if (payload.length() == 0) {
+            throw BootstrapException(activity.getString(R.string.bootstrap_settings_extensions_install_manifest_precheck_invalid))
+        }
+    }
+
+    private data class RemoteManifestCandidate(
+        val branch: String,
+        val url: String
+    )
+
+    private fun buildRemoteManifestCandidates(repository: NormalizedExtensionRepository): List<RemoteManifestCandidate> {
+        val uri = runCatching { Uri.parse(repository.cloneUrl) }.getOrNull() ?: return emptyList()
+        val host = uri.host.orEmpty().lowercase()
+        val segments = uri.pathSegments.orEmpty()
+            .map { segment -> segment.trim() }
+            .filter { segment -> segment.isNotEmpty() }
+            .toMutableList()
+        if (segments.size < 2) {
+            return emptyList()
+        }
+
+        segments[segments.lastIndex] = stripGitSuffix(segments.last())
+        if (segments.any { segment -> segment.isBlank() }) {
+            return emptyList()
+        }
+
+        val branchCandidates = resolveManifestBranches(host, segments, repository.branch)
+            .ifEmpty { return emptyList() }
+
+        return when (host) {
+            "github.com", "www.github.com" -> {
+                val owner = segments[0]
+                val repo = segments[1]
+                branchCandidates.map { branch ->
+                    RemoteManifestCandidate(
+                        branch = branch,
+                        url = "https://raw.githubusercontent.com/$owner/$repo/$branch/manifest.json"
+                    )
+                }
+            }
+
+            "gitlab.com", "www.gitlab.com" -> {
+                val projectPath = segments.joinToString("/")
+                branchCandidates.map { branch ->
+                    RemoteManifestCandidate(
+                        branch = branch,
+                        url = "https://gitlab.com/$projectPath/-/raw/$branch/manifest.json"
+                    )
+                }
+            }
+
+            else -> emptyList()
+        }
+    }
+
+    private fun resolveManifestBranches(host: String, segments: List<String>, explicitBranch: String?): List<String> {
+        explicitBranch?.trim()?.takeIf { value -> value.isNotEmpty() }?.let { branch ->
+            return listOf(branch)
+        }
+
+        val defaultBranch = when (host) {
+            "github.com", "www.github.com" -> fetchGithubDefaultBranch(segments)
+            "gitlab.com", "www.gitlab.com" -> fetchGitlabDefaultBranch(segments)
+            else -> null
+        }
+
+        return listOfNotNull(defaultBranch, "main", "master").distinct()
+    }
+
+    private fun fetchGithubDefaultBranch(segments: List<String>): String? {
+        if (segments.size < 2) {
+            return null
+        }
+        val owner = segments[0]
+        val repo = segments[1]
+        val payload = runCatching {
+            fetchTextWithStatus("https://api.github.com/repos/$owner/$repo")
+        }.getOrNull() ?: return null
+        if (payload.first !in 200..299) {
+            return null
+        }
+        return runCatching {
+            JSONObject(payload.second).optString("default_branch").trim().ifBlank { null }
+        }.getOrNull()
+    }
+
+    private fun fetchGitlabDefaultBranch(segments: List<String>): String? {
+        val projectPath = segments.joinToString("/")
+        val encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8.toString())
+        val payload = runCatching {
+            fetchTextWithStatus("https://gitlab.com/api/v4/projects/$encodedPath")
+        }.getOrNull() ?: return null
+        if (payload.first !in 200..299) {
+            return null
+        }
+        return runCatching {
+            JSONObject(payload.second).optString("default_branch").trim().ifBlank { null }
+        }.getOrNull()
+    }
+
+    private fun fetchTextWithStatus(targetUrl: String): Pair<Int, String> {
+        val connection = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 8_000
+            readTimeout = 8_000
+            setRequestProperty("Accept", "application/json, text/plain, */*")
+            setRequestProperty("User-Agent", "SillyDroid-Android-Host")
+        }
+
+        return try {
+            val statusCode = connection.responseCode
+            val payload = (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader()
+                ?.use { reader -> reader.readText() }
+                .orEmpty()
+            statusCode to payload
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun extensionRuntimeScript(): String {
         return """
             #!/system/bin/sh
@@ -2497,7 +2665,8 @@ internal class BootstrapSettingsExtensionsCoordinator(
             const targetDir = process.env.SILLYDROID_EXTENSION_TARGET_DIR;
             const repoUrl = process.env.SILLYDROID_EXTENSION_REPO_URL;
             const repoBranch = process.env.SILLYDROID_EXTENSION_REPO_BRANCH || undefined;
-            if (!targetDir || !repoUrl) {
+            const tempDir = process.env.SILLYDROID_EXTENSION_TEMP_DIR;
+            if (!targetDir || !repoUrl || !tempDir) {
                 throw new Error('Missing extension target or repository URL.');
             }
 
@@ -2508,16 +2677,16 @@ internal class BootstrapSettingsExtensionsCoordinator(
             fs.mkdirSync(parentDir, { recursive: true });
 
             try {
-                writeProgress({ step: 'backup', indeterminate: true });
-                if (fs.existsSync(targetDir)) {
-                    fs.renameSync(targetDir, backupDir);
+                writeProgress({ step: 'prepare', indeterminate: true });
+                if (fs.existsSync(tempDir)) {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
                 }
 
-                writeProgress({ step: 'prepare', indeterminate: true });
+                writeProgress({ step: 'clone', indeterminate: true });
                 await git.clone({
                     fs,
                     http,
-                    dir: targetDir,
+                    dir: tempDir,
                     url: repoUrl,
                     depth: 1,
                     ref: repoBranch,
@@ -2533,12 +2702,20 @@ internal class BootstrapSettingsExtensionsCoordinator(
                 });
 
                 writeProgress({ step: 'validate', indeterminate: true });
-                const manifestPath = path.join(targetDir, 'manifest.json');
+                const manifestPath = path.join(tempDir, 'manifest.json');
                 if (!fs.existsSync(manifestPath)) {
                     throw new Error('Manifest file not found at ' + manifestPath);
                 }
 
                 JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+                writeProgress({ step: 'backup', indeterminate: true });
+                if (fs.existsSync(targetDir)) {
+                    fs.renameSync(targetDir, backupDir);
+                }
+
+                writeProgress({ step: 'updating', indeterminate: true });
+                fs.renameSync(tempDir, targetDir);
                 writeProgress({ step: 'completed', loaded: 1, total: 1 });
 
                 if (fs.existsSync(backupDir)) {
@@ -2553,7 +2730,15 @@ internal class BootstrapSettingsExtensionsCoordinator(
                     fs.renameSync(backupDir, targetDir);
                 }
 
+                if (fs.existsSync(tempDir)) {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                }
+
                 throw error;
+            } finally {
+                if (fs.existsSync(tempDir)) {
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                }
             }
         """.trimIndent()
     }

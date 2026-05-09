@@ -184,6 +184,8 @@
     <string name="bootstrap_settings_extensions_cleanup_broken_result">清理错误插件完成：删除 %1$d 个，失败 %2$d 个。</string>
     <string name="bootstrap_settings_extensions_cleanup_broken_failed">清理错误插件失败。</string>
     <string name="bootstrap_settings_extensions_install_preview_failed">扩展 manifest 校验失败，请确认仓库地址可访问且根目录包含 manifest.json。日志：%1$s</string>
+    <string name="bootstrap_settings_extensions_install_manifest_precheck_missing">扩展 manifest 预检失败：在这些分支都未找到根目录 manifest.json（%1$s）。</string>
+    <string name="bootstrap_settings_extensions_install_manifest_precheck_invalid">扩展 manifest 预检失败：manifest.json 不是合法 JSON 对象。</string>
     <string name="bootstrap_settings_extensions_install_confirm_title">安装扩展？</string>
     <string name="bootstrap_settings_extensions_install_confirm_message_new">检测到扩展“%1$s”。版本：%2$s。作者：%3$s。将安装到目录 %4$s。是否继续？</string>
     <string name="bootstrap_settings_extensions_install_confirm_message_overwrite">检测到扩展“%1$s”。版本：%2$s。作者：%3$s。目标目录 %4$s 已存在，确认后会先备份旧目录再覆盖安装。是否继续？</string>
