@@ -18,6 +18,7 @@ class SettingsActivityViewModel(
     private val _uiState = MutableStateFlow(
         SettingsActivityUiState(
             hostDisplayMode = hostPreferencesRepository.hostDisplayMode,
+            backgroundOnlyModeEnabled = !hostPreferencesRepository.launchWebViewOnReady,
             floatingLogsEnabled = hostPreferencesRepository.floatingLogBubbleEnabled,
             pullRefreshEnabled = hostPreferencesRepository.webViewPullRefreshEnabled,
             debugDiagnosticsEnabled = hostPreferencesRepository.debugDiagnosticsEnabled,
@@ -45,6 +46,15 @@ class SettingsActivityViewModel(
             hostPreferencesRepository.hostDisplayMode = mode
         }
         _uiState.update { current -> current.copy(hostDisplayMode = mode) }
+    }
+
+    fun setBackgroundOnlyModeEnabled(enabled: Boolean) {
+        // 纯后台模式是启动展示策略：服务照常启动，但 ready 后不自动加载宿主 WebView。
+        val launchWebViewOnReady = !enabled
+        if (hostPreferencesRepository.launchWebViewOnReady != launchWebViewOnReady) {
+            hostPreferencesRepository.launchWebViewOnReady = launchWebViewOnReady
+        }
+        _uiState.update { current -> current.copy(backgroundOnlyModeEnabled = enabled) }
     }
 
     fun setPullRefreshEnabled(enabled: Boolean) {

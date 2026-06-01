@@ -42,6 +42,7 @@ class BootstrapOverlayRendererFailureDiagnosisTest {
             ),
             syncSettingsEntryState = {},
             showWebView = {},
+            shouldLaunchWebViewOnReady = { true },
             updateWebViewRefreshLayoutEnabled = {},
             setPullGestureRefreshing = {},
             onReadyMonitoring = {}

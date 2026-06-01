@@ -18,6 +18,7 @@ class SettingsActivityStateController(
     private val activity: AppCompatActivity,
     private val viewModel: SettingsActivityViewModel,
     private val floatingLogsSwitch: MaterialSwitch,
+    private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val pullRefreshSwitch: MaterialSwitch,
     private val hostDisplayModeRow: View,
     private val hostDisplayModeValueView: TextView,
@@ -31,6 +32,10 @@ class SettingsActivityStateController(
         floatingLogsSwitch.isChecked = initialState.floatingLogsEnabled
         floatingLogsSwitch.setOnCheckedChangeListener { _, isChecked ->
             viewModel.setFloatingLogsEnabled(isChecked)
+        }
+        backgroundOnlyModeSwitch.isChecked = initialState.backgroundOnlyModeEnabled
+        backgroundOnlyModeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.setBackgroundOnlyModeEnabled(isChecked)
         }
         pullRefreshSwitch.isChecked = initialState.pullRefreshEnabled
         pullRefreshSwitch.setOnCheckedChangeListener { _, isChecked ->
@@ -62,6 +67,9 @@ class SettingsActivityStateController(
     private fun render(state: SettingsActivityUiState) {
         if (floatingLogsSwitch.isChecked != state.floatingLogsEnabled) {
             floatingLogsSwitch.isChecked = state.floatingLogsEnabled
+        }
+        if (backgroundOnlyModeSwitch.isChecked != state.backgroundOnlyModeEnabled) {
+            backgroundOnlyModeSwitch.isChecked = state.backgroundOnlyModeEnabled
         }
         if (pullRefreshSwitch.isChecked != state.pullRefreshEnabled) {
             pullRefreshSwitch.isChecked = state.pullRefreshEnabled

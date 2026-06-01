@@ -13,6 +13,7 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         internal const val preferencesName = "bootstrap-host-config"
         private const val servicePortKey = "service-port"
         private const val hostDisplayModeKey = "host-display-mode"
+        private const val launchWebViewOnReadyKey = "launch-webview-on-ready"
         private const val webViewPullRefreshEnabledKey = "webview-pull-refresh-enabled"
         private const val debugDiagnosticsEnabledKey = "debug-diagnostics-enabled"
         private const val unrestrictedFileImportSelectionEnabledKey = "unrestricted-file-import-selection-enabled"
@@ -53,6 +54,14 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         set(value) {
             preferences.edit()
                 .putString(hostDisplayModeKey, value.name)
+                .apply()
+        }
+
+    override var launchWebViewOnReady: Boolean
+        get() = preferences.getBoolean(launchWebViewOnReadyKey, true)
+        set(value) {
+            preferences.edit()
+                .putBoolean(launchWebViewOnReadyKey, value)
                 .apply()
         }
 

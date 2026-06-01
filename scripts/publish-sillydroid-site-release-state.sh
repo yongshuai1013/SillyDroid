@@ -134,6 +134,17 @@ def assert_non_negative_integer(value, field_name):
     return value
 
 
+def site_notes_markdown(release):
+    # 站点与 App 只展示用户可读变更说明，过滤 GitHub Release 自动附加的 APK 构建元信息。
+    body = assert_string(release.get("body"), "release.body")
+    body = re.sub(
+        r"(?ms)^## SillyDroid Android APK[ \t]*\n.*?(?=^## |\Z)",
+        "",
+        body,
+    )
+    return assert_string(body, "release.body")
+
+
 def fetch_json(url):
     request = urllib.request.Request(
         url,
@@ -184,7 +195,7 @@ def build_ready_state(release, metadata, apk_asset):
             "url": assert_string(release.get("html_url"), "release.html_url"),
             "publishedAt": assert_string(release.get("published_at") or release.get("created_at"), "release.published_at"),
             "isPrerelease": release.get("prerelease") is True,
-            "notesMarkdown": assert_string(release.get("body"), "release.body"),
+            "notesMarkdown": site_notes_markdown(release),
             "buildType": "release",
             "versionName": assert_string(metadata.get("version_name"), "metadata.version_name"),
             "hostVersion": assert_string(metadata.get("host_version"), "metadata.host_version"),

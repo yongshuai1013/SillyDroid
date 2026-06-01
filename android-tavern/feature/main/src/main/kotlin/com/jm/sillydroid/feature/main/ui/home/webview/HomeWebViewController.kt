@@ -77,6 +77,8 @@ class HomeWebViewController(
         webView.settings.allowContentAccess = true
         webView.settings.setSupportMultipleWindows(true)
         webView.settings.javaScriptCanOpenWindowsAutomatically = true
+        // SillyTavern 的提示音、TTS 或媒体预览由页面逻辑触发，宿主不额外要求用户先点按 WebView。
+        webView.settings.mediaPlaybackRequiresUserGesture = false
 
         installSessionPersistence()
         installJavascriptInterfaces(webView)

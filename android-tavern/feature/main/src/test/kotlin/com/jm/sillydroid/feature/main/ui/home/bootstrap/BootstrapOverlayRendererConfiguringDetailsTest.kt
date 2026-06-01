@@ -39,6 +39,7 @@ class BootstrapOverlayRendererConfiguringDetailsTest {
             ),
             syncSettingsEntryState = {},
             showWebView = {},
+            shouldLaunchWebViewOnReady = { true },
             updateWebViewRefreshLayoutEnabled = {},
             setPullGestureRefreshing = {},
             onReadyMonitoring = {}

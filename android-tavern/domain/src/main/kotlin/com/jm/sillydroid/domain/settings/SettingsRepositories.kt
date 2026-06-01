@@ -30,6 +30,7 @@ interface SettingsConfigRepository {
 interface HostPreferencesRepository {
     var servicePort: Int
     var hostDisplayMode: HostDisplayMode
+    var launchWebViewOnReady: Boolean
     var webViewPullRefreshEnabled: Boolean
     var debugDiagnosticsEnabled: Boolean
     var unrestrictedFileImportSelectionEnabled: Boolean

@@ -97,7 +97,9 @@ class MainActivity : AppCompatActivity() {
         installSystemUi()
         installWebViewStack(savedInstanceState)
         installBootstrapWiring()
-        inspectWebViewRuntimeBeforeBootstrap()
+        if (shouldUseWebViewSurface()) {
+            inspectWebViewRuntimeBeforeBootstrap()
+        }
         bootstrapOverlayHost.startBootstrap(false)
     }
 
@@ -176,6 +178,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun installWebViewStack(savedInstanceState: Bundle?) {
+        if (!shouldUseWebViewSurface()) {
+            // 纯后台模式只启动本地 Tavern 服务；不配置、不恢复也不加载宿主 WebView 页面。
+            registerBackPressHandler()
+            return
+        }
         webViewHost.configure()
         registerBackPressHandler()
         webViewHost.restoreState(savedInstanceState)
@@ -190,13 +197,17 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         reapplyCurrentSystemBars()
         floatingLogsHost.refreshVisibility()
-        webViewHost.onResume()
-        webViewHost.updateRefreshLayoutEnabled()
+        if (shouldUseWebViewSurface()) {
+            webViewHost.onResume()
+            webViewHost.updateRefreshLayoutEnabled()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        webViewHost.saveState(outState)
+        if (shouldUseWebViewSurface()) {
+            webViewHost.saveState(outState)
+        }
     }
 
     override fun onDestroy() {
@@ -234,6 +245,8 @@ class MainActivity : AppCompatActivity() {
         }
         onBackPressedDispatcher.addCallback(this, backPressCallback)
     }
+
+    private fun shouldUseWebViewSurface(): Boolean = hostConfigStore.launchWebViewOnReady
 
     private fun installWebViewJavascriptInterfaces(targetWebView: WebView) {
         // Tavern 页面里的导出既可能是普通 URL，也可能是 blob/data；宿主在这里统一接管保存到系统下载目录。
@@ -450,6 +463,7 @@ class MainActivity : AppCompatActivity() {
             .put("webViewRecommendedChromiumMajorVersion", WebViewRuntimeCompatibility.recommendedChromiumMajorVersion())
             .put("webViewOutdated", webViewRuntimeCompatibility?.isOutdated == true)
             .put("hostDisplayMode", hostConfigStore.hostDisplayMode.name)
+            .put("launchWebViewOnReady", hostConfigStore.launchWebViewOnReady)
             .put("floatingLogBubbleEnabled", hostConfigStore.floatingLogBubbleEnabled)
             .put("webViewPullRefreshEnabled", hostConfigStore.webViewPullRefreshEnabled)
             .put("unrestrictedFileImportSelectionEnabled", hostConfigStore.unrestrictedFileImportSelectionEnabled)

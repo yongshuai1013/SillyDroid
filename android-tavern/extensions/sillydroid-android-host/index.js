@@ -1048,9 +1048,20 @@ function bindNativeThemeRefresh() {
     });
 }
 
+function shouldApplyBusinessUiPatches(settings = getExtensionSettings()) {
+    // 默认主题只保留宿主桥能力、设置面板和样式挂载；不要再主动改酒馆业务界面结构/交互，
+    // 避免 Android 多选兼容补丁、紧凑聊天等宿主增强继续影响“附加世界书”等原生页面行为。
+    return settings.theme !== 'default';
+}
+
 function applyCompactChatLayoutState(settings = getExtensionSettings()) {
-    const enabled = settings.compactChatLayout === true;
     const html = document.documentElement;
+    if (!shouldApplyBusinessUiPatches(settings)) {
+        delete html.dataset.sillydroidChatCompact;
+        return;
+    }
+
+    const enabled = settings.compactChatLayout === true;
     if (enabled) {
         // 紧凑模式只暴露状态标记，布局由 CSS 处理；禁止移动聊天 DOM，避免破坏上游 swipe/按钮逻辑。
         html.dataset.sillydroidChatCompact = 'true';
@@ -2046,7 +2057,7 @@ function ensureAndroidMultipleSelect2() {
 }
 
 function observeAndroidMultipleSelect2() {
-    if (!isAndroidTouchEnvironment() || document.documentElement.dataset[worldInfoSelect2ObserverId]) {
+    if (!shouldApplyBusinessUiPatches() || !isAndroidTouchEnvironment() || document.documentElement.dataset[worldInfoSelect2ObserverId]) {
         return;
     }
 

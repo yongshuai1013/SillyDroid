@@ -218,6 +218,7 @@ internal object HostLogBundleInfoFormatter {
             appendLine("    \"storageName\": ${jsonString(baseInfo.hostConfigSnapshot.storageName)},")
             appendLine("    \"snapshotPolicy\": ${jsonString(baseInfo.hostConfigSnapshot.snapshotPolicy)},")
             appendLine("    \"servicePort\": ${baseInfo.hostConfigSnapshot.servicePort},")
+            appendLine("    \"launchWebViewOnReady\": ${baseInfo.hostConfigSnapshot.launchWebViewOnReady},")
             appendLine("    \"webViewPullRefreshEnabled\": ${baseInfo.hostConfigSnapshot.webViewPullRefreshEnabled},")
             appendLine("    \"debugDiagnosticsEnabled\": ${baseInfo.hostConfigSnapshot.debugDiagnosticsEnabled},")
             appendLine("    \"terminalFontSizePx\": ${baseInfo.hostConfigSnapshot.terminalFontSizePx},")

@@ -40,6 +40,7 @@ class SettingsActivityViewModelResultFlagsTest {
     private class FakeHostPreferencesRepository : HostPreferencesRepository {
         override var servicePort: Int = 8000
         override var hostDisplayMode: HostDisplayMode = HostDisplayMode.NORMAL
+        override var launchWebViewOnReady: Boolean = true
         override var webViewPullRefreshEnabled: Boolean = true
         override var debugDiagnosticsEnabled: Boolean = false
         override var unrestrictedFileImportSelectionEnabled: Boolean = false

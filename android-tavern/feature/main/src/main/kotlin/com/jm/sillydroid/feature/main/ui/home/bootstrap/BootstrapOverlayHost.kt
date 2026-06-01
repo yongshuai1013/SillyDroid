@@ -84,6 +84,7 @@ class BootstrapOverlayHost(
             ),
             syncSettingsEntryState = ::syncBootstrapSettingsEntryState,
             showWebView = { url -> webViewHost.showWebView(url) },
+            shouldLaunchWebViewOnReady = { appGraph.hostConfigStore.launchWebViewOnReady },
             updateWebViewRefreshLayoutEnabled = { webViewHost.updateRefreshLayoutEnabled() },
             setPullGestureRefreshing = { refreshing -> homeViewModel.isPullGestureRefreshing = refreshing },
             onReadyMonitoring = onMaybePromptDefaultExtensionsAfterBootstrapReady

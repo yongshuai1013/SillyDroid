@@ -26,6 +26,7 @@ class BootstrapOverlayRendererTest {
         overlay: View = mock(),
         refreshLayout: View = mock(),
         onShowWebView: (String) -> Unit = {},
+        shouldLaunchWebViewOnReady: () -> Boolean = { true },
         onReadyMonitoring: () -> Unit = {},
         updateRefreshLayoutEnabled: () -> Unit = {}
     ): BootstrapOverlayRenderer {
@@ -54,6 +55,7 @@ class BootstrapOverlayRendererTest {
             text = text,
             syncSettingsEntryState = { /* no-op */ },
             showWebView = onShowWebView,
+            shouldLaunchWebViewOnReady = shouldLaunchWebViewOnReady,
             updateWebViewRefreshLayoutEnabled = updateRefreshLayoutEnabled,
             setPullGestureRefreshing = { /* no-op */ },
             onReadyMonitoring = onReadyMonitoring
@@ -99,5 +101,55 @@ class BootstrapOverlayRendererTest {
 
         verify(newWebView).visibility = View.VISIBLE
         verify(oldWebView, never()).visibility = View.VISIBLE
+    }
+
+    @Test
+    fun `ready state launches webView by default`() {
+        val webView = mock<WebView>()
+        var shownUrl: String? = null
+
+        val renderer = newRenderer(
+            webViewRef = { webView },
+            onShowWebView = { url -> shownUrl = url }
+        )
+
+        renderer.render(
+            BootstrapSessionSnapshot(
+                lifecycle = BootstrapLifecycle.READY_MONITORING,
+                localUrl = "http://127.0.0.1:8000/",
+                derivedUiFlags = BootstrapDerivedUiFlags(showWebView = true, showBootstrapOverlay = false)
+            )
+        )
+
+        org.junit.Assert.assertEquals("http://127.0.0.1:8000/", shownUrl)
+    }
+
+    @Test
+    fun `ready state keeps webView hidden when background only mode is enabled`() {
+        val webView = mock<WebView>()
+        val overlay = mock<View>()
+        val refreshLayout = mock<View>()
+        var shownUrl: String? = null
+
+        val renderer = newRenderer(
+            webViewRef = { webView },
+            overlay = overlay,
+            refreshLayout = refreshLayout,
+            onShowWebView = { url -> shownUrl = url },
+            shouldLaunchWebViewOnReady = { false }
+        )
+
+        renderer.render(
+            BootstrapSessionSnapshot(
+                lifecycle = BootstrapLifecycle.READY_MONITORING,
+                localUrl = "http://127.0.0.1:8000/",
+                derivedUiFlags = BootstrapDerivedUiFlags(showWebView = true, showBootstrapOverlay = false)
+            )
+        )
+
+        org.junit.Assert.assertNull(shownUrl)
+        verify(overlay).visibility = View.VISIBLE
+        verify(refreshLayout).visibility = View.GONE
+        verify(webView).visibility = View.GONE
     }
 }

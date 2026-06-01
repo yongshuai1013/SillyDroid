@@ -110,6 +110,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var dataPanelView: View
     private lateinit var quickFieldContainer: LinearLayout
     private lateinit var floatingLogsSwitch: MaterialSwitch
+    private lateinit var backgroundOnlyModeSwitch: MaterialSwitch
     private lateinit var pullRefreshSwitch: MaterialSwitch
     private lateinit var displayModeRow: View
     private lateinit var displayModeValueView: TextView
@@ -338,6 +339,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         dataPanelView = findViewById(R.id.bootstrapSettingsDataPanel)
         quickFieldContainer = findViewById(R.id.bootstrapSettingsQuickFieldContainer)
         floatingLogsSwitch = findViewById(R.id.bootstrapSettingsFloatingLogsSwitch)
+        backgroundOnlyModeSwitch = findViewById(R.id.bootstrapSettingsBackgroundOnlyModeSwitch)
         pullRefreshSwitch = findViewById(R.id.bootstrapSettingsPullRefreshSwitch)
         displayModeRow = findViewById(R.id.bootstrapSettingsDisplayModeRow)
         displayModeValueView = findViewById(R.id.bootstrapSettingsDisplayModeValue)
@@ -414,6 +416,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             searchLayout = searchLayout,
             quickActionsButton = quickActionsButton,
             floatingLogsSwitch = floatingLogsSwitch,
+            backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
             hostDisplayModeRow = displayModeRow,
             unrestrictedFileImportSelectionSwitch = unrestrictedFileImportSelectionSwitch,
@@ -459,6 +462,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             activity = this,
             viewModel = settingsActivityViewModel,
             floatingLogsSwitch = floatingLogsSwitch,
+            backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
             hostDisplayModeRow = displayModeRow,
             hostDisplayModeValueView = displayModeValueView,

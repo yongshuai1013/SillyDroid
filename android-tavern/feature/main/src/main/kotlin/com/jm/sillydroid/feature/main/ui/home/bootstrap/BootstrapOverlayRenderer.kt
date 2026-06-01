@@ -17,12 +17,14 @@ class BootstrapOverlayRenderer(
     private val text: BootstrapOverlayText,
     private val syncSettingsEntryState: (BootstrapSessionSnapshot) -> Unit,
     private val showWebView: (String) -> Unit,
+    private val shouldLaunchWebViewOnReady: () -> Boolean,
     private val updateWebViewRefreshLayoutEnabled: () -> Unit,
     private val setPullGestureRefreshing: (Boolean) -> Unit,
     private val onReadyMonitoring: () -> Unit
 ) {
     fun render(snapshot: BootstrapSessionSnapshot) {
         renderStatusText(snapshot)
+        val shouldShowWebView = snapshot.derivedUiFlags.showWebView && shouldLaunchWebViewOnReady()
 
         views.retryButton.isVisible = snapshot.derivedUiFlags.canRetry
         views.retryButton.text = if (snapshot.lifecycle == BootstrapLifecycle.CONFIGURING) {
@@ -32,14 +34,14 @@ class BootstrapOverlayRenderer(
         }
         views.progress.isVisible = snapshot.derivedUiFlags.showProgress
         views.progressLabel.isVisible = views.progress.isVisible
-        views.settingsButton.isVisible = !snapshot.derivedUiFlags.showWebView
+        views.settingsButton.isVisible = !shouldShowWebView
         syncSettingsEntryState(snapshot)
         renderProgress(snapshot)
 
-        if (snapshot.lifecycle == BootstrapLifecycle.READY_MONITORING) {
+        if (snapshot.lifecycle == BootstrapLifecycle.READY_MONITORING && shouldShowWebView) {
             showWebView(snapshot.localUrl)
             onReadyMonitoring()
-        } else if (snapshot.derivedUiFlags.showWebView) {
+        } else if (shouldShowWebView) {
             views.webViewRefreshLayout.isVisible = true
             views.webView().isVisible = true
             updateWebViewRefreshLayoutEnabled()

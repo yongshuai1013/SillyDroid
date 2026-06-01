@@ -147,6 +147,7 @@ class HostLogBundleInfoFormatterTest {
         assertTrue(bundleInfoJson.contains("\"hostConfig\": {"))
         assertTrue(bundleInfoJson.contains("\"snapshotPolicy\": \"explicit-host-preferences-only\""))
         assertTrue(bundleInfoJson.contains("\"servicePort\": 8000"))
+        assertTrue(bundleInfoJson.contains("\"launchWebViewOnReady\": true"))
         assertTrue(bundleInfoJson.contains("\"terminalFontSizePx\": 16"))
         assertTrue(bundleInfoJson.contains("\"terminalCursorBlinkEnabled\": true"))
         assertTrue(bundleInfoJson.contains("\"terminalExtraKeysEnabled\": true"))
@@ -164,6 +165,7 @@ class HostLogBundleInfoFormatterTest {
             snapshotPolicy = "explicit-host-preferences-only",
             servicePort = 8000,
             hostDisplayMode = HostDisplayMode.NORMAL,
+            launchWebViewOnReady = true,
             webViewPullRefreshEnabled = true,
             debugDiagnosticsEnabled = false,
             unrestrictedFileImportSelectionEnabled = false,
