@@ -46,6 +46,7 @@ class FloatingLogsController(
     private val currentSnapshot: () -> BootstrapSessionSnapshot,
     private val canOpenSettings: (BootstrapSessionSnapshot) -> Boolean,
     private val openSettings: () -> Unit,
+    private val openCurrentPageInBrowser: () -> Boolean,
     private val reloadTavernWebView: () -> Boolean
 ) : DefaultLifecycleObserver {
     private var refreshJob: Job? = null
@@ -306,6 +307,10 @@ class FloatingLogsController(
         views.openSettingsButton.setOnClickListener {
             setPanelVisible(false)
             openSettings()
+        }
+        views.openBrowserButton.setOnClickListener {
+            // 日志球面板里的浏览器入口复用 WebView 当前页外开能力，确保带出酒馆当前路由而不是固定首页。
+            openCurrentPageInBrowser()
         }
     }
 
@@ -663,6 +668,7 @@ data class FloatingLogsViews(
     val downloadButton: MaterialButton,
     val clearButton: MaterialButton,
     val openSettingsButton: MaterialButton,
+    val openBrowserButton: MaterialButton,
     val scrollToBottomButton: ImageButton
 )
 

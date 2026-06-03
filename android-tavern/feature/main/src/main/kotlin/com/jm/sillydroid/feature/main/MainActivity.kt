@@ -124,6 +124,7 @@ class MainActivity : AppCompatActivity() {
             currentSnapshot = { processManager.currentSnapshot() },
             canOpenSettings = { snapshot -> bootstrapOverlayHost.canOpenBootstrapSettings(snapshot) },
             openSettings = { bootstrapOverlayHost.openBootstrapSettings() },
+            openCurrentPageInBrowser = { webViewHost.openCurrentPageInExternalBrowser() },
             reloadTavernWebView = { webViewHost.reloadTavernWebView(source = "floating_logs_button") }
         )
         webViewHost = TavernWebViewHost(

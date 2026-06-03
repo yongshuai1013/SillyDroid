@@ -408,6 +408,14 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="@dimen/sillydroid_space_sm"
                         android:text="@string/floating_logs_open_settings_button" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/floatingLogsOpenBrowserButton"
+                        style="@style/Widget.SillyDroid.FloatingLogsCompactButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/sillydroid_space_sm"
+                        android:text="@string/floating_logs_open_browser_button" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

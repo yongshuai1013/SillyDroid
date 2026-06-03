@@ -27,6 +27,7 @@ class FloatingLogsHost(
     private val currentSnapshot: () -> BootstrapSessionSnapshot,
     private val canOpenSettings: (BootstrapSessionSnapshot) -> Boolean,
     private val openSettings: () -> Unit,
+    private val openCurrentPageInBrowser: () -> Boolean,
     private val reloadTavernWebView: () -> Boolean
 ) {
     private val bubble: ImageButton = activity.findViewById(R.id.floatingLogsBubble)
@@ -43,6 +44,7 @@ class FloatingLogsHost(
     private val downloadButton: MaterialButton = activity.findViewById(R.id.floatingLogsDownloadButton)
     private val clearButton: MaterialButton = activity.findViewById(R.id.floatingLogsClearButton)
     private val openSettingsButton: MaterialButton = activity.findViewById(R.id.floatingLogsOpenSettingsButton)
+    private val openBrowserButton: MaterialButton = activity.findViewById(R.id.floatingLogsOpenBrowserButton)
     private val scrollToBottomButton: ImageButton = activity.findViewById(R.id.floatingLogsScrollToBottomButton)
 
     private val layoutController: FloatingLogsLayoutController by lazy {
@@ -84,6 +86,7 @@ class FloatingLogsHost(
                 downloadButton = downloadButton,
                 clearButton = clearButton,
                 openSettingsButton = openSettingsButton,
+                openBrowserButton = openBrowserButton,
                 scrollToBottomButton = scrollToBottomButton
             ),
             text = FloatingLogsText(
@@ -117,6 +120,7 @@ class FloatingLogsHost(
             currentSnapshot = currentSnapshot,
             canOpenSettings = canOpenSettings,
             openSettings = openSettings,
+            openCurrentPageInBrowser = openCurrentPageInBrowser,
             reloadTavernWebView = reloadTavernWebView
         )
     }
