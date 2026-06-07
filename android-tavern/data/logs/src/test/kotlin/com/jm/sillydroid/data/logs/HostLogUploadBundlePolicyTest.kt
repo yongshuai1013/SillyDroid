@@ -34,6 +34,35 @@ class HostLogUploadBundlePolicyTest {
     }
 
     @Test
+    fun defaultUploadRelativePathsIncludeExitInfoTraceArtifacts() {
+        val logsDir = createTempDirectory(prefix = "host-log-upload-exit-trace").toFile()
+        try {
+            val exitInfo = File(logsDir, HostLogManager.exitInfoLogFileName).apply { writeText("exit-info") }
+            File(logsDir, HostLogManager.exitInfoTraceDirectoryName).mkdirs()
+            val trace = File(
+                logsDir,
+                "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+            ).apply { writeBytes(byteArrayOf(0, 1, 2, 3)) }
+            val tavern = File(logsDir, "sillydroid-server-20260605-010101-001.log").apply { writeText("server") }
+
+            val relativePaths = HostLogUploadBundlePolicy.defaultUploadRelativePaths(
+                logFiles = listOf(exitInfo, trace, tavern),
+                logsDir = logsDir
+            )
+
+            assertEquals(
+                setOf(
+                    HostLogManager.exitInfoLogFileName,
+                    "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+                ),
+                relativePaths
+            )
+        } finally {
+            logsDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun compactTavernServerLogContentKeepsOnlyFirstFiftyLines() {
         val logsDir = createTempDirectory(prefix = "host-log-upload-tavern-head").toFile()
         try {

@@ -50,7 +50,9 @@ internal object HostLogExportPlanner {
             return emptyList()
         }
 
-        val groupedFiles = logFiles.groupBy { file -> resolveExportTypeKey(file.name) }
+        val groupedFiles = logFiles.groupBy { file ->
+            resolveExportTypeKey(file.relativeTo(logsDir).invariantSeparatorsPath)
+        }
         val stableOptions = stableExportTypeKeys.map { typeKey ->
             val files = groupedFiles[typeKey].orEmpty()
             HostLogExportOption(
@@ -95,7 +97,7 @@ internal object HostLogExportPlanner {
         return logsDir.walkTopDown()
             .filter { file ->
                 file.isFile &&
-                    file.extension.equals("log", ignoreCase = true) &&
+                    isCollectableLogArtifact(file.relativeTo(logsDir).invariantSeparatorsPath) &&
                     (
                         normalizedIncludedPaths == null ||
                             file.relativeTo(logsDir).invariantSeparatorsPath in normalizedIncludedPaths
@@ -105,9 +107,11 @@ internal object HostLogExportPlanner {
             .toList()
     }
 
-    private fun resolveExportTypeKey(fileName: String): String {
-        val normalizedName = fileName.lowercase(Locale.ROOT)
+    private fun resolveExportTypeKey(relativePath: String): String {
+        val normalizedPath = relativePath.replace('\\', '/').lowercase(Locale.ROOT)
+        val normalizedName = File(normalizedPath).name
         return when {
+            normalizedPath.startsWith("${HostLogManager.exitInfoTraceDirectoryName}/") -> exportTypeExitInfo
             normalizedName.startsWith(tavernServerLogPrefix) -> exportTypeTavernServer
             normalizedName.startsWith(startupLogPrefix) -> exportTypeStartup
             normalizedName.startsWith(rootfsRuntimeLogPrefix) -> exportTypeRootfsRuntime
@@ -120,6 +124,16 @@ internal object HostLogExportPlanner {
             normalizedName.startsWith("extension-") -> exportTypeExtensionRuntime
             else -> exportTypeOther
         }
+    }
+
+    private fun isCollectableLogArtifact(relativePath: String): Boolean {
+        val normalizedPath = relativePath.replace('\\', '/').lowercase(Locale.ROOT)
+        if (normalizedPath.endsWith(".tmp")) {
+            return false
+        }
+
+        return normalizedPath.endsWith(".log") ||
+            normalizedPath.startsWith("${HostLogManager.exitInfoTraceDirectoryName}/")
     }
 
     private fun resolveExportDisplayName(typeKey: String): String {

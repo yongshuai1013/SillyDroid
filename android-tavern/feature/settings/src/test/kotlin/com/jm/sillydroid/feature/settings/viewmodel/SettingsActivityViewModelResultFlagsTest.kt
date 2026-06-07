@@ -68,5 +68,8 @@ class SettingsActivityViewModelResultFlagsTest {
         override var crashLogUploadEnabled: Boolean = false
         override var crashLogUploadPromptConsumed: Boolean = false
         override var lastCrashLogAutoUploadKey: String? = null
+        override var pendingRendererGoneAutoUploadKey: String? = null
+        override var pendingRendererGoneAutoUploadCrashType: String? = null
+        override var pendingRendererGoneAutoUploadNotes: String? = null
     }
 }

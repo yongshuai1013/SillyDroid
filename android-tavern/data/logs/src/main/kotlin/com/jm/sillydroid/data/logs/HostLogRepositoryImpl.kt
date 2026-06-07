@@ -48,6 +48,7 @@ class HostLogRepositoryImpl(context: Context) : HostLogRepository {
     }
 
     override fun listExportOptions(): List<HostLogExportOption> {
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
         return HostLogManager.listExportOptions(appContext)
     }
 
@@ -90,10 +91,12 @@ class HostLogRepositoryImpl(context: Context) : HostLogRepository {
     }
 
     override fun exportToUri(targetUri: Uri, includedRelativePaths: Set<String>?): HostLogBundleExportResult {
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
         return HostLogManager.exportToUri(appContext, targetUri, includedRelativePaths = includedRelativePaths)
     }
 
     override fun exportToPublicDownloads(includedRelativePaths: Set<String>?): HostLogBundleExportResult {
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
         return HostLogManager.exportToPublicDownloads(appContext, includedRelativePaths = includedRelativePaths)
     }
 
@@ -102,7 +105,7 @@ class HostLogRepositoryImpl(context: Context) : HostLogRepository {
         includedRelativePaths: Set<String>?
     ): HostLogBundleUploadResult {
         // 上传前刷新一次系统进程退出记录，让 WebView sandbox / App 进程退出线索尽量进入同一份证据包。
-        ApplicationExitInfoLogStore.refreshAsync(appContext)
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
         val (archiveFile, _) = HostLogManager.exportCompactUploadBundleToCacheFile(
             context = appContext,
             includedRelativePaths = includedRelativePaths
@@ -119,8 +122,8 @@ class HostLogRepositoryImpl(context: Context) : HostLogRepository {
 
     override suspend fun uploadCrashBundle(config: HostLogBundleUploadRequestConfig): HostLogBundleUploadResult {
         // 自动崩溃上传只带默认非敏感日志集合，避免未经用户逐项确认时把酒馆聊天相关日志放进包里。
-        ApplicationExitInfoLogStore.refreshAsync(appContext)
-        val (archiveFile, _) = HostLogManager.exportCompactUploadBundleToCacheFile(
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
+        val (archiveFile, _) = HostLogManager.exportCrashUploadBundleToCacheFile(
             context = appContext,
             includedRelativePaths = HostLogManager.defaultUploadRelativePaths(appContext)
         )
@@ -139,8 +142,8 @@ class HostLogRepositoryImpl(context: Context) : HostLogRepository {
         feedbackText: String?,
         attachments: List<HostLogBundleAttachment>
     ): HostLogBundleUploadResult {
-        // 用户反馈和自动崩溃共用同一个轻量上传包策略：默认不包含酒馆服务日志，并把图片放到 feedback/ 下。
-        ApplicationExitInfoLogStore.refreshAsync(appContext)
+        // 用户反馈不是崩溃事故包，继续走轻量上传策略：默认不包含酒馆服务日志，并把图片放到 feedback/ 下。
+        ApplicationExitInfoLogStore.refreshBlocking(appContext)
         val (archiveFile, _) = HostLogManager.exportCompactUploadBundleToCacheFile(
             context = appContext,
             includedRelativePaths = HostLogManager.defaultUploadRelativePaths(appContext),

@@ -30,6 +30,9 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         private const val crashLogUploadPromptConsumedKey = "crash-log-upload-prompt-consumed"
         private const val legacyCrashLogUploadPromptVersionCodeKey = "crash-log-upload-prompt-version-code"
         private const val lastCrashLogAutoUploadKeyKey = "last-crash-log-auto-upload-key"
+        private const val pendingRendererGoneAutoUploadKeyKey = "pending-renderer-gone-auto-upload-key"
+        private const val pendingRendererGoneAutoUploadCrashTypeKey = "pending-renderer-gone-auto-upload-crash-type"
+        private const val pendingRendererGoneAutoUploadNotesKey = "pending-renderer-gone-auto-upload-notes"
 
         const val floatingLogRefreshIntervalRealtimeMillis = FloatingLogRefreshIntervals.REALTIME_MILLIS
         const val floatingLogRefreshIntervalOneSecondMillis = FloatingLogRefreshIntervals.ONE_SECOND_MILLIS
@@ -213,6 +216,53 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
                     remove(lastCrashLogAutoUploadKeyKey)
                 } else {
                     putString(lastCrashLogAutoUploadKeyKey, normalized)
+                }
+            }.apply()
+        }
+
+    override var pendingRendererGoneAutoUploadKey: String?
+        get() = preferences.getString(pendingRendererGoneAutoUploadKeyKey, null)
+            ?.trim()
+            ?.takeIf { value -> value.isNotBlank() }
+        set(value) {
+            preferences.edit().apply {
+                val normalized = value.orEmpty().trim()
+                if (normalized.isBlank()) {
+                    remove(pendingRendererGoneAutoUploadKeyKey)
+                    remove(pendingRendererGoneAutoUploadCrashTypeKey)
+                    remove(pendingRendererGoneAutoUploadNotesKey)
+                } else {
+                    putString(pendingRendererGoneAutoUploadKeyKey, normalized)
+                }
+            }.apply()
+        }
+
+    override var pendingRendererGoneAutoUploadCrashType: String?
+        get() = preferences.getString(pendingRendererGoneAutoUploadCrashTypeKey, null)
+            ?.trim()
+            ?.takeIf { value -> value.isNotBlank() }
+        set(value) {
+            preferences.edit().apply {
+                val normalized = value.orEmpty().trim()
+                if (normalized.isBlank()) {
+                    remove(pendingRendererGoneAutoUploadCrashTypeKey)
+                } else {
+                    putString(pendingRendererGoneAutoUploadCrashTypeKey, normalized)
+                }
+            }.apply()
+        }
+
+    override var pendingRendererGoneAutoUploadNotes: String?
+        get() = preferences.getString(pendingRendererGoneAutoUploadNotesKey, null)
+            ?.trim()
+            ?.takeIf { value -> value.isNotBlank() }
+        set(value) {
+            preferences.edit().apply {
+                val normalized = value.orEmpty().trim()
+                if (normalized.isBlank()) {
+                    remove(pendingRendererGoneAutoUploadNotesKey)
+                } else {
+                    putString(pendingRendererGoneAutoUploadNotesKey, normalized)
                 }
             }.apply()
         }

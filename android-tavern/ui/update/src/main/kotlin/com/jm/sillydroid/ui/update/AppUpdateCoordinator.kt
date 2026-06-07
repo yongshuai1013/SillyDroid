@@ -47,7 +47,8 @@ class AppUpdateCoordinator(
     data class OverlayUi(
         val container: View,
         val button: ImageButton,
-        val badgeView: View
+        val badgeView: View,
+        val settingsBadgeView: View? = null
     )
 
     data class AboutUi(
@@ -140,21 +141,19 @@ class AppUpdateCoordinator(
             clearDownloadState(removeDownload = true)
         }
 
-        var checkSucceeded = true
-        val availableRelease = appUpdateRepository.cachedAvailableRelease() ?: run {
-            checkSucceeded = checkForUpdates(silent = false)
-            appUpdateRepository.cachedAvailableRelease()
-        }
-
-        if (availableRelease == null) {
-            if (checkSucceeded) {
+        val cachedRelease = appUpdateRepository.cachedAvailableRelease()
+        if (cachedRelease == null) {
+            // 手动“检查更新”只刷新 latest 缓存和 UI，不在同一次点击里直接开始下载；
+            // 发现新版本后按钮会切换成“下载更新”，由用户下一次明确点击触发下载。
+            val checkSucceeded = checkForUpdates(silent = false)
+            if (checkSucceeded && appUpdateRepository.cachedAvailableRelease() == null) {
                 showMessage(R.string.app_update_no_updates)
             }
             return
         }
 
         withContext(dispatchers.io) {
-            appUpdateRepository.startDownload(availableRelease)
+            appUpdateRepository.startDownload(cachedRelease)
         }.also { downloadState ->
             hostDownloadNotificationCoordinator.postAppUpdateDownloadStarted(downloadState)
         }
@@ -366,6 +365,7 @@ class AppUpdateCoordinator(
         val showOverlayUpdateEntry = currentDownload != null || availableRelease != null
         overlayUi?.container?.isVisible = showOverlayUpdateEntry
         overlayUi?.badgeView?.isVisible = showOverlayUpdateEntry
+        overlayUi?.settingsBadgeView?.isVisible = showOverlayUpdateEntry
         overlayUi?.button?.isEnabled = true
         overlayUi?.button?.contentDescription = when {
             currentDownload?.verifiedReadyToInstall == true -> activity.getString(R.string.bootstrap_update_open)

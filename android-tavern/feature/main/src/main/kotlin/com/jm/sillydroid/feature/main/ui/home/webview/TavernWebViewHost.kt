@@ -78,7 +78,7 @@ class TavernWebViewHost(
         private const val DEBUG_ACTION_CRASH_RENDERER = "com.jm.sillydroid.debug.CRASH_RENDERER"
         private const val DEBUG_ACTION_KILL_RENDERER = "com.jm.sillydroid.debug.KILL_RENDERER"
         // ApplicationExitInfo 写入系统历史退出列表存在机型级延迟；renderer gone 后补几次刷新，
-        // 提高导出日志命中“刚刚那次 WebView renderer 退出”的概率。
+        // 提高下一次启动自动上传或用户手动导出时命中“刚刚那次 WebView renderer 退出”的概率。
         private val RENDERER_EXIT_INFO_REFRESH_DELAYS_MS = longArrayOf(1_500L, 5_000L)
     }
 
@@ -712,8 +712,8 @@ class TavernWebViewHost(
             recoveryUrl = recoveryUrl,
             rendererGoneDetail = rendererGoneDetail
         )
-        scheduleRendererExitInfoRefresh()
         uploadRendererGoneLogBundle(info)
+        scheduleRendererExitInfoRefresh()
         if (recoveryUrl.isNotBlank()) {
             homeViewModel.loadedUrl = recoveryUrl
         }

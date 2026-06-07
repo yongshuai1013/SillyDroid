@@ -43,6 +43,8 @@ internal data class HostLogBundleLogSummary(
     val fileCount: Int,
     val includesCrashLog: Boolean,
     val includesExitInfoLog: Boolean,
+    val rawArtifactCount: Int = 0,
+    val includesExitInfoTraceArtifacts: Boolean = false,
     val relativePaths: List<String>,
     val note: String? = null
 )
@@ -166,8 +168,10 @@ internal object HostLogBundleInfoFormatter {
             appendLine("crashLogUploadEnabled=${baseInfo.hostConfigSnapshot.crashLogUploadEnabled}")
             appendLine("crashLogUploadPromptConsumed=${baseInfo.hostConfigSnapshot.crashLogUploadPromptConsumed}")
             appendLine("logFileCount=${summary.fileCount}")
+            appendLine("rawArtifactCount=${summary.rawArtifactCount}")
             appendLine("includesCrashLog=${summary.includesCrashLog}")
             appendLine("includesExitInfoLog=${summary.includesExitInfoLog}")
+            appendLine("includesExitInfoTraceArtifacts=${summary.includesExitInfoTraceArtifacts}")
             if (summary.note != null) {
                 appendLine("note=${summary.note}")
             }
@@ -242,8 +246,10 @@ internal object HostLogBundleInfoFormatter {
             appendLine("  },")
             appendLine("  \"logs\": {")
             appendLine("    \"fileCount\": ${summary.fileCount},")
+            appendLine("    \"rawArtifactCount\": ${summary.rawArtifactCount},")
             appendLine("    \"includesCrashLog\": ${summary.includesCrashLog},")
             appendLine("    \"includesExitInfoLog\": ${summary.includesExitInfoLog},")
+            appendLine("    \"includesExitInfoTraceArtifacts\": ${summary.includesExitInfoTraceArtifacts},")
             appendLine("    \"files\": ${jsonStringArray(summary.relativePaths)}${if (summary.note != null) "," else ""}")
             if (summary.note != null) {
                 appendLine("    \"note\": ${jsonString(summary.note)}")
@@ -261,8 +267,12 @@ internal object HostLogBundleInfoFormatter {
             fileCount = logFiles.size,
             includesCrashLog = logFiles.any { it.name.equals(HostLogManager.crashLogFileName, ignoreCase = true) },
             includesExitInfoLog = logFiles.any { it.name.equals(HostLogManager.exitInfoLogFileName, ignoreCase = true) },
+            rawArtifactCount = relativePaths.count { path -> !path.endsWith(".log", ignoreCase = true) },
+            includesExitInfoTraceArtifacts = relativePaths.any { path ->
+                path.startsWith("${HostLogManager.exitInfoTraceDirectoryName}/", ignoreCase = true)
+            },
             relativePaths = relativePaths,
-            note = if (logFiles.isEmpty()) "no .log files found under android-tavern/logs" else null
+            note = if (logFiles.isEmpty()) "no log artifacts found under android-tavern/logs" else null
         )
     }
 

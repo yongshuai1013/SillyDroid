@@ -15,7 +15,7 @@
     <string name="bootstrap_settings_about_update_status_failed">检查更新失败：%1$s</string>
     <string name="bootstrap_settings_about_update_notes">更新说明：\n%1$s</string>
     <string name="bootstrap_settings_about_update_action_check">检查更新</string>
-    <string name="bootstrap_settings_about_update_action_download">下载更新</string>
+    <string name="bootstrap_settings_about_update_action_download">下载并更新</string>
     <string name="bootstrap_settings_about_update_action_install">安装更新</string>
     <string name="bootstrap_settings_about_update_action_downloading">下载中</string>
     <string name="app_update_check_failed_with_reason">检查更新失败：%1$s</string>

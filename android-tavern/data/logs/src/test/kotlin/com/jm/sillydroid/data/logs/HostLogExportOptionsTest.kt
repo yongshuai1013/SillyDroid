@@ -85,4 +85,36 @@ class HostLogExportOptionsTest {
             logsDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun exitInfoOptionIncludesRawTraceArtifacts() {
+        val logsDir = createTempDirectory(prefix = "host-log-export-exit-traces").toFile()
+        try {
+            File(logsDir, HostLogManager.exitInfoLogFileName).apply { writeText("exit-info") }
+            File(logsDir, HostLogManager.exitInfoTraceDirectoryName).mkdirs()
+            File(
+                logsDir,
+                "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+            ).apply { writeBytes(byteArrayOf(0, 1, 2, 3)) }
+
+            val logFiles = HostLogExportPlanner.collectLogFiles(logsDir)
+            val options = HostLogExportPlanner.buildExportOptions(
+                logFiles = logFiles,
+                logsDir = logsDir
+            )
+
+            val exitInfoOption = options.first { it.displayName == "应用退出信息" }
+            assertEquals(
+                setOf(
+                    HostLogManager.exitInfoLogFileName,
+                    "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+                ),
+                exitInfoOption.relativePaths
+            )
+            assertTrue(exitInfoOption.selectedByDefault)
+            assertFalse(exitInfoOption.containsSensitiveContent)
+        } finally {
+            logsDir.deleteRecursively()
+        }
+    }
 }

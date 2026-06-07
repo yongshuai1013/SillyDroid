@@ -57,8 +57,10 @@ class HostLogBundleInfoFormatterTest {
         assertTrue(bundleInfo.contains("crashLogUploadEnabled=true"))
         assertTrue(bundleInfo.contains("crashLogUploadPromptConsumed=true"))
         assertTrue(bundleInfo.contains("logFileCount=2"))
+        assertTrue(bundleInfo.contains("rawArtifactCount=0"))
         assertTrue(bundleInfo.contains("includesCrashLog=true"))
         assertTrue(bundleInfo.contains("includesExitInfoLog=false"))
+        assertTrue(bundleInfo.contains("includesExitInfoTraceArtifacts=false"))
     }
 
     @Test
@@ -94,13 +96,14 @@ class HostLogBundleInfoFormatterTest {
             includesCrashLog = false,
             includesExitInfoLog = false,
             relativePaths = emptyList(),
-            note = "no .log files found under android-tavern/logs"
+            note = "no log artifacts found under android-tavern/logs"
         )
 
         val bundleInfo = HostLogBundleInfoFormatter.buildText(baseInfo = baseInfo, summary = summary)
 
         assertTrue(bundleInfo.contains("logFileCount=0"))
-        assertTrue(bundleInfo.contains("note=no .log files found under android-tavern/logs"))
+        assertTrue(bundleInfo.contains("rawArtifactCount=0"))
+        assertTrue(bundleInfo.contains("note=no log artifacts found under android-tavern/logs"))
     }
 
     @Test
@@ -159,8 +162,38 @@ class HostLogBundleInfoFormatterTest {
         assertTrue(bundleInfoJson.contains("\"crashLogUploadPromptConsumed\": true"))
         assertTrue(bundleInfoJson.contains("\"floatingLogBubblePosition\": {\"horizontalFraction\": 0.75, \"verticalFraction\": 0.25}"))
         assertTrue(bundleInfoJson.contains("\"fileCount\": 2"))
+        assertTrue(bundleInfoJson.contains("\"rawArtifactCount\": 0"))
         assertTrue(bundleInfoJson.contains("\"files\": [\"startup-20260517.log\", \"${HostLogManager.crashLogFileName}\"]"))
         assertTrue(bundleInfoJson.contains("\"supportedAbis\": [\"arm64-v8a\", \"armeabi-v7a\"]"))
+    }
+
+    @Test
+    fun summarizeMarksExitInfoTraceArtifacts() {
+        val logsDir = kotlin.io.path.createTempDirectory(prefix = "host-log-bundle-trace-summary").toFile()
+        try {
+            val exitInfoLog = java.io.File(logsDir, HostLogManager.exitInfoLogFileName).apply { writeText("exit-info") }
+            java.io.File(logsDir, HostLogManager.exitInfoTraceDirectoryName).mkdirs()
+            val traceFile = java.io.File(
+                logsDir,
+                "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+            ).apply { writeBytes(byteArrayOf(0, 1, 2, 3)) }
+
+            val summary = HostLogBundleInfoFormatter.summarize(
+                logFiles = listOf(exitInfoLog, traceFile),
+                logsDir = logsDir
+            )
+
+            assertTrue(summary.includesExitInfoLog)
+            assertTrue(summary.includesExitInfoTraceArtifacts)
+            assertTrue(summary.relativePaths.contains(HostLogManager.exitInfoLogFileName))
+            assertTrue(
+                summary.relativePaths.contains(
+                    "${HostLogManager.exitInfoTraceDirectoryName}/history-0-1000-pid-123-reason-crash_native-webview.trace"
+                )
+            )
+        } finally {
+            logsDir.deleteRecursively()
+        }
     }
 
     private fun sampleHostConfigSnapshot(): HostConfigSnapshot {

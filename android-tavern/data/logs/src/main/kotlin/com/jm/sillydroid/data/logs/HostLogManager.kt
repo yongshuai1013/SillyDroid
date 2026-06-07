@@ -67,6 +67,7 @@ object HostLogManager {
 
     const val crashLogFileName = "app-last-crash.log"
     const val exitInfoLogFileName = "app-last-exit-info.log"
+    const val exitInfoTraceDirectoryName = "exit-info-traces"
 
     @Volatile
     private var currentAppSessionId: String? = null
@@ -131,6 +132,12 @@ object HostLogManager {
 
     fun exitInfoLogFile(context: Context): File {
         return File(logsDirectory(context), exitInfoLogFileName)
+    }
+
+    fun exitInfoTraceDirectory(context: Context): File {
+        // Android 12+ 可能把 native tombstone 作为 ApplicationExitInfo trace 暴露；
+        // 原始内容可能是二进制/protobuf，必须独立保存，不能只塞进文本日志。
+        return File(logsDirectory(context), exitInfoTraceDirectoryName)
     }
 
     fun logsDirectory(context: Context): File {
@@ -213,6 +220,11 @@ object HostLogManager {
         val currentJsErrorFileName = currentJsErrorLogFileName(applicationContext)
 
         logsDir.listFiles().orEmpty().forEach { file ->
+            if (file.isDirectory && file.name.equals(exitInfoTraceDirectoryName, ignoreCase = true)) {
+                file.deleteRecursively()
+                return@forEach
+            }
+
             if (!file.isFile || !file.extension.equals("log", ignoreCase = true)) {
                 return@forEach
             }
@@ -652,6 +664,19 @@ object HostLogManager {
             feedbackText = feedbackText,
             attachments = attachments,
             maxArchiveSizeBytes = uploadMaxLogArchiveBytes
+        )
+    }
+
+    fun exportCrashUploadBundleToCacheFile(
+        context: Context,
+        includedRelativePaths: Set<String>? = null
+    ): Pair<File, HostLogBundleExportResult> {
+        // 崩溃/renderer gone 是重大事故现场，自动上传只排除敏感酒馆服务日志，不再裁剪宿主诊断、
+        // ApplicationExitInfo 或 raw tombstone trace，保证远端拿到的是尽量完整的定位证据。
+        return exportToCacheFile(
+            context = context,
+            includedRelativePaths = includedRelativePaths,
+            compactForUpload = false
         )
     }
 
@@ -1106,7 +1131,7 @@ object HostLogManager {
             logFiles.forEach { logFile ->
                 val relativePath = logFile.relativeTo(logsDir).invariantSeparatorsPath
                 zipOut.putNextEntry(ZipEntry(relativePath))
-                if (compactForUpload) {
+                if (compactForUpload && logFile.extension.equals("log", ignoreCase = true)) {
                     writeCompactUploadLogEntry(context, logFile, zipOut)
                 } else {
                     logFile.inputStream().use { input ->

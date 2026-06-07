@@ -86,7 +86,6 @@ class MainActivity : AppCompatActivity() {
     private var lastWebViewSystemBarsColorHex: String? = null
     private var lastWebViewStatusBarColorHex: String? = null
     private var lastWebViewNavigationBarColorHex: String? = null
-    private var lastRendererGoneAutoUploadKey: String? = null
 
     private val feedbackImageLauncher = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (::floatingLogsHost.isInitialized) {
@@ -330,6 +329,11 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
+        val pendingRendererGoneKey = hostConfigStore.pendingRendererGoneAutoUploadKey
+        if (!pendingRendererGoneKey.isNullOrBlank()) {
+            uploadPendingRendererGoneLogBundle(trigger = trigger, uploadKey = pendingRendererGoneKey)
+            return
+        }
         val uploadKey = hostLogRepository.currentCrashAutoUploadKey() ?: return
         if (hostConfigStore.lastCrashLogAutoUploadKey == uploadKey) {
             return
@@ -364,19 +368,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun uploadRendererGoneLogBundle(info: WebViewRendererGoneInfo) {
-        if (!hostConfigStore.crashLogUploadEnabled) {
+    private fun uploadPendingRendererGoneLogBundle(trigger: String, uploadKey: String) {
+        val crashType = hostConfigStore.pendingRendererGoneAutoUploadCrashType
+            ?: "webview-renderer-gone"
+        val notes = hostConfigStore.pendingRendererGoneAutoUploadNotes.orEmpty()
+        if (hostConfigStore.lastCrashLogAutoUploadKey == uploadKey) {
+            clearPendingRendererGoneAutoUpload()
             recordDefaultHostDiagnostic(
                 category = "log_upload",
-                body = "event=auto_upload_skipped reason=consent_disabled trigger=webview_renderer_gone didCrash=${info.didCrash}"
-            )
-            return
-        }
-        val uploadKey = rendererGoneAutoUploadKey(info)
-        if (lastRendererGoneAutoUploadKey == uploadKey) {
-            recordDefaultHostDiagnostic(
-                category = "log_upload",
-                body = "event=auto_upload_skipped reason=duplicate trigger=webview_renderer_gone key=$uploadKey"
+                body = "event=auto_upload_skipped reason=duplicate trigger=$trigger crashType=$crashType key=$uploadKey"
             )
             return
         }
@@ -388,41 +388,70 @@ class MainActivity : AppCompatActivity() {
                         config = HostLogBundleUploadRequestConfig(
                             uploadUrl = appGraph.appUpdateBuildConfig.crashLogUploadUrl,
                             writerApiKey = appGraph.appUpdateBuildConfig.crashLogUploadWriterApiKey,
-                            source = "webview-renderer-gone",
-                            crashType = if (info.didCrash) {
-                                "webview-renderer-crash"
-                            } else {
-                                "webview-renderer-gone"
-                            },
-                            notes = info.toDiagnosticText()
+                            source = "pending-webview-renderer-gone",
+                            crashType = crashType,
+                            notes = notes
                         )
                     )
                 }
             }
             result.onSuccess { upload ->
-                lastRendererGoneAutoUploadKey = uploadKey
+                hostConfigStore.lastCrashLogAutoUploadKey = uploadKey
+                clearPendingRendererGoneAutoUpload()
                 recordDefaultHostDiagnostic(
                     category = "log_upload",
-                    body = "event=auto_upload_success trigger=webview_renderer_gone crashLogId=${upload.crashLogId} archiveSizeBytes=${upload.archiveSizeBytes}"
+                    body = "event=auto_upload_success trigger=$trigger crashType=$crashType crashLogId=${upload.crashLogId} archiveSizeBytes=${upload.archiveSizeBytes}"
                 )
             }.onFailure { error ->
                 recordDefaultHostDiagnostic(
                     category = "log_upload",
-                    body = "event=auto_upload_failed trigger=webview_renderer_gone reason=${error.javaClass.simpleName} message=${error.message.orEmpty()}"
+                    body = "event=auto_upload_failed trigger=$trigger crashType=$crashType reason=${error.javaClass.simpleName} message=${error.message.orEmpty()}"
                 )
             }
         }
     }
 
-    private fun rendererGoneAutoUploadKey(info: WebViewRendererGoneInfo): String {
-        // WebView renderer gone 不一定产生 App 闪退文件；这里按当前 Activity 会话内 renderer 退出特征去重，
-        // 避免同一次 WebView 异常恢复链路重复上传同一批日志。
-        return listOf(
-            "webview_renderer_gone",
-            info.didCrash.toString(),
-            info.rendererPriorityAtExit?.toString().orEmpty()
-        ).joinToString(":")
+    private fun uploadRendererGoneLogBundle(info: WebViewRendererGoneInfo) {
+        if (!hostConfigStore.crashLogUploadEnabled) {
+            recordDefaultHostDiagnostic(
+                category = "log_upload",
+                body = "event=auto_upload_skipped reason=consent_disabled trigger=webview_renderer_gone didCrash=${info.didCrash}"
+            )
+            return
+        }
+        val existingPendingKey = hostConfigStore.pendingRendererGoneAutoUploadKey
+        if (!existingPendingKey.isNullOrBlank()) {
+            recordDefaultHostDiagnostic(
+                category = "log_upload",
+                body = "event=auto_upload_skipped reason=pending_exists trigger=webview_renderer_gone key=$existingPendingKey"
+            )
+            return
+        }
+
+        val uploadKey = rendererGoneAutoUploadKey()
+        hostConfigStore.pendingRendererGoneAutoUploadKey = uploadKey
+        hostConfigStore.pendingRendererGoneAutoUploadCrashType = if (info.didCrash) {
+            "webview-renderer-crash"
+        } else {
+            "webview-renderer-gone"
+        }
+        // renderer gone 发生后系统写入 ApplicationExitInfo/tombstone 可能延迟；
+        // 这里只记录待上传标志，下一次启动再打包，避免太早上传导致关键 native 退出信息缺失。
+        hostConfigStore.pendingRendererGoneAutoUploadNotes = info.toDiagnosticText()
+        recordDefaultHostDiagnostic(
+            category = "log_upload",
+            body = "event=auto_upload_mark_pending trigger=webview_renderer_gone key=$uploadKey didCrash=${info.didCrash} uploadOnNextStart=true"
+        )
     }
+
+    private fun clearPendingRendererGoneAutoUpload() {
+        hostConfigStore.pendingRendererGoneAutoUploadKey = null
+    }
+
+    private fun rendererGoneAutoUploadKey(): String =
+        // WebView renderer gone 不一定产生 App 闪退文件；用事件时间生成待上传标志，
+        // 同一标志会在下一次启动上传成功后清理，上传失败则保留到后续启动继续补刷。
+        "webview_renderer_gone:${System.currentTimeMillis()}"
 
     private fun installWebViewJavascriptInterfaces(targetWebView: WebView) {
         // Tavern 页面里的导出既可能是普通 URL，也可能是 blob/data；宿主在这里统一接管保存到系统下载目录。

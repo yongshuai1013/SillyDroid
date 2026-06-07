@@ -45,6 +45,9 @@ interface HostPreferencesRepository {
     var crashLogUploadEnabled: Boolean
     var crashLogUploadPromptConsumed: Boolean
     var lastCrashLogAutoUploadKey: String?
+    var pendingRendererGoneAutoUploadKey: String?
+    var pendingRendererGoneAutoUploadCrashType: String?
+    var pendingRendererGoneAutoUploadNotes: String?
 }
 
 interface DataArchiveRepository {

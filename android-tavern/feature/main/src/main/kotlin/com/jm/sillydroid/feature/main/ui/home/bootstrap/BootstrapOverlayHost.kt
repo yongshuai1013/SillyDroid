@@ -54,6 +54,7 @@ class BootstrapOverlayHost(
     private val updateButtonContainer: View = activity.findViewById(R.id.bootstrapUpdateButtonContainer)
     private val updateButton: ImageButton = activity.findViewById(R.id.bootstrapUpdateButton)
     private val updateBadge: View = activity.findViewById(R.id.bootstrapUpdateBadge)
+    private val settingsUpdateBadge: View = activity.findViewById(R.id.bootstrapSettingsUpdateBadge)
     private val settingsButton: ImageButton = activity.findViewById(R.id.bootstrapSettingsButton)
     private val progress: ProgressBar = activity.findViewById(R.id.bootstrapProgress)
     private val progressLabel: TextView = activity.findViewById(R.id.bootstrapProgressLabel)
@@ -136,7 +137,8 @@ class BootstrapOverlayHost(
             overlayUi = AppUpdateCoordinator.OverlayUi(
                 container = updateButtonContainer,
                 button = updateButton,
-                badgeView = updateBadge
+                badgeView = updateBadge,
+                settingsBadgeView = settingsUpdateBadge
             )
         )
         appUpdateCoordinator.initialize()
