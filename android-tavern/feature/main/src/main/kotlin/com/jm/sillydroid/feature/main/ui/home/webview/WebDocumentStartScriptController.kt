@@ -11,9 +11,9 @@ import androidx.webkit.WebViewFeature
  * 2) 用扩展保存的主题运行态同步开屏 mini CSS；
  * 3) 安装宿主 Notification shim。
  *
- * 这里不再保存或还原页面 sessionStorage；WebView 会话恢复只依赖 WebView 自身 restoreState。
+ * 这里只做 document-start 脚本注入，不保存、不还原 WebView 或页面状态。
  */
-class WebSessionPersistenceController(
+class WebDocumentStartScriptController(
     private val webView: WebView,
     private val systemNotificationBridgeName: String,
     private val androidHostBridgeName: String,

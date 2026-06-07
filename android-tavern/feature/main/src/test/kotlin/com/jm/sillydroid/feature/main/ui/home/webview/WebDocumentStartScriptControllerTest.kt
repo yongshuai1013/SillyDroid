@@ -6,11 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.kotlin.mock
 
-class WebSessionPersistenceControllerTest {
+class WebDocumentStartScriptControllerTest {
 
     @Test
     fun `startup theme script only styles the startup loader area`() {
-        val controller = WebSessionPersistenceController(
+        val controller = WebDocumentStartScriptController(
             webView = mock<WebView>(),
             systemNotificationBridgeName = "NativeNotificationBridge",
             androidHostBridgeName = "AndroidHostBridge",
@@ -25,8 +25,8 @@ class WebSessionPersistenceControllerTest {
         assertFalse(Regex("""html\[data-sillydroid-startup-theme="glass"],\s*html\[data-sillydroid-startup-theme="glass"]\s+body""").containsMatchIn(script))
     }
 
-    private fun WebSessionPersistenceController.documentStartScriptForTest(): String {
-        val method = WebSessionPersistenceController::class.java.getDeclaredMethod("buildDocumentStartScript")
+    private fun WebDocumentStartScriptController.documentStartScriptForTest(): String {
+        val method = WebDocumentStartScriptController::class.java.getDeclaredMethod("buildDocumentStartScript")
         method.isAccessible = true
         return method.invoke(this) as String
     }

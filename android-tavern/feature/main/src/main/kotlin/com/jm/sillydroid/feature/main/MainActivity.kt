@@ -76,7 +76,7 @@ class MainActivity : AppCompatActivity() {
     private val hostLogRepository by lazy { appGraph.hostLogRepository }
     private val processManager by lazy<BootstrapController> { appGraph.bootstrapController }
     private val runtimeConfigRepository by lazy { appGraph.runtimeConfigRepository }
-    private val homeViewModel: HomeViewModel by viewModels { HomeViewModel.Factory(this, processManager) }
+    private val homeViewModel: HomeViewModel by viewModels { HomeViewModel.Factory(processManager) }
 
     private lateinit var hostIo: HostIoController
     private lateinit var floatingLogsHost: FloatingLogsHost
@@ -113,7 +113,7 @@ class MainActivity : AppCompatActivity() {
         composeHosts()
         bootstrapOverlayHost.installAppUpdateCoordinator()
         installSystemUi()
-        installWebViewStack(savedInstanceState)
+        installWebViewStack()
         installBootstrapWiring()
         if (shouldUseWebViewSurface()) {
             inspectWebViewRuntimeBeforeBootstrap()
@@ -211,15 +211,14 @@ class MainActivity : AppCompatActivity() {
         hostIo.requestNotificationPermissionIfNeeded()
     }
 
-    private fun installWebViewStack(savedInstanceState: Bundle?) {
+    private fun installWebViewStack() {
         if (!shouldUseWebViewSurface()) {
-            // 纯后台模式只启动本地 Tavern 服务；不配置、不恢复也不加载宿主 WebView 页面。
+            // 纯后台模式只启动本地 Tavern 服务；不配置也不加载宿主 WebView 页面。
             registerBackPressHandler()
             return
         }
         webViewHost.configure()
         registerBackPressHandler()
-        webViewHost.restoreState(savedInstanceState)
     }
 
     private fun installBootstrapWiring() {
@@ -232,7 +231,6 @@ class MainActivity : AppCompatActivity() {
         reapplyCurrentSystemBars()
         floatingLogsHost.refreshVisibility()
         if (shouldUseWebViewSurface()) {
-            webViewHost.onResume()
             webViewHost.updateRefreshLayoutEnabled()
         }
     }
@@ -241,11 +239,8 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
         recordActivityLifecycleDiagnostic(
             event = "on_save_instance_state",
-            extra = "webViewSurface=${shouldUseWebViewSurface()}"
+            extra = "webViewSurface=${shouldUseWebViewSurface()} webViewStatePersistence=disabled"
         )
-        if (shouldUseWebViewSurface()) {
-            webViewHost.saveState(outState)
-        }
     }
 
     override fun onDestroy() {

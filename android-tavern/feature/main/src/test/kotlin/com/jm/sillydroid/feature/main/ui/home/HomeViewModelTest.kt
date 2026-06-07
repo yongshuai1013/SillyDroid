@@ -5,7 +5,6 @@ import com.jm.sillydroid.core.model.bootstrap.BootstrapLifecycle
 import com.jm.sillydroid.core.model.bootstrap.BootstrapSessionSnapshot
 import com.jm.sillydroid.core.model.settings.BrowserDataClearTarget
 import com.jm.sillydroid.domain.bootstrap.BootstrapController
-import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -73,7 +72,6 @@ class HomeViewModelTest {
         val viewModel = HomeViewModel(fakeController)
 
         assertEquals("", viewModel.loadedUrl)
-        assertFalse(viewModel.hasRestoredWebViewState)
         assertEquals(0, viewModel.pendingLocalRetryAttempts)
         assertFalse(viewModel.isOpeningBootstrapSettings)
         assertFalse(viewModel.isPullGestureRefreshing)
@@ -95,7 +93,6 @@ class HomeViewModelTest {
     fun `resetForBootstrapRestart clears webview and retry state`() = runTest {
         val viewModel = HomeViewModel(fakeController).apply {
             loadedUrl = "https://example.test/page"
-            hasRestoredWebViewState = true
             pendingLocalRetryAttempts = 4
             shouldForceFreshWebViewLoad = true
             isOpeningBootstrapSettings = true
@@ -106,41 +103,12 @@ class HomeViewModelTest {
         viewModel.resetForBootstrapRestart()
 
         assertEquals("", viewModel.loadedUrl)
-        assertFalse(viewModel.hasRestoredWebViewState)
         assertEquals(0, viewModel.pendingLocalRetryAttempts)
         assertTrue(viewModel.shouldForceFreshWebViewLoad)
         // 仅清理 WebView 恢复 / 重试相关字段；其它瞬态字段保持原值。
         assertTrue(viewModel.isOpeningBootstrapSettings)
         assertTrue(viewModel.isPullGestureRefreshing)
         assertTrue(viewModel.isImeVisible)
-    }
-
-    @Test
-    fun `loadedUrl is restored from SavedStateHandle`() = runTest {
-        val handle = SavedStateHandle(mapOf("home.loaded_url" to "https://example.test/restored"))
-        val viewModel = HomeViewModel(fakeController, handle)
-
-        assertEquals("https://example.test/restored", viewModel.loadedUrl)
-    }
-
-    @Test
-    fun `pendingLocalRetryAttempts is restored from SavedStateHandle`() = runTest {
-        val handle = SavedStateHandle(mapOf("home.pending_local_retry" to 5))
-        val viewModel = HomeViewModel(fakeController, handle)
-
-        assertEquals(5, viewModel.pendingLocalRetryAttempts)
-    }
-
-    @Test
-    fun `setting loadedUrl writes through to SavedStateHandle`() = runTest {
-        val handle = SavedStateHandle()
-        val viewModel = HomeViewModel(fakeController, handle)
-
-        viewModel.loadedUrl = "https://example.test/page"
-        viewModel.pendingLocalRetryAttempts = 3
-
-        assertEquals("https://example.test/page", handle.get<String>("home.loaded_url"))
-        assertEquals(3, handle.get<Int>("home.pending_local_retry"))
     }
 
     @Test

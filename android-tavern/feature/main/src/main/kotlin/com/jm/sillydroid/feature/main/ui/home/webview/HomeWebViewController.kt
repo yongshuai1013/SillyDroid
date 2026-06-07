@@ -30,7 +30,7 @@ fun interface WebViewJsErrorSink {
 class HomeWebViewController(
     private val context: Context,
     private val webViewProvider: () -> WebView,
-    private val installSessionPersistence: () -> Unit,
+    private val installDocumentStartScripts: () -> Unit,
     private val installJavascriptInterfaces: (WebView) -> Unit,
     private val shouldOpenExternally: (Uri) -> Boolean,
     private val openExternalBrowser: (Uri) -> Boolean,
@@ -38,7 +38,7 @@ class HomeWebViewController(
     private val onPageCommitVisible: (WebView, String?) -> Unit,
     private val onPageFinished: (WebView, String?) -> Unit,
     private val isLocalTavernUrl: (String) -> Boolean,
-    private val onMainFrameLocalLoadError: (String) -> Unit,
+    private val onMainFrameLocalLoadError: (WebViewLocalLoadErrorInfo) -> Unit,
     private val onRendererGone: (WebViewRendererGoneInfo) -> Unit,
     private val onDownloadRequested: (BrowserDownloadRequest) -> Unit,
     private val onShowFileChooser: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Unit,
@@ -80,7 +80,7 @@ class HomeWebViewController(
         // SillyTavern 的提示音、TTS 或媒体预览由页面逻辑触发，宿主不额外要求用户先点按 WebView。
         webView.settings.mediaPlaybackRequiresUserGesture = false
 
-        installSessionPersistence()
+        installDocumentStartScripts()
         installJavascriptInterfaces(webView)
         configureClients(webView)
     }
@@ -154,7 +154,14 @@ class HomeWebViewController(
                     body = "$mainFrameTag method=${request.method} code=${errorCode ?: "?"} url=$failingUrl desc=${description.orEmpty()}"
                 )
                 if (request.isForMainFrame && isLocalTavernUrl(failingUrl)) {
-                    onMainFrameLocalLoadError(failingUrl)
+                    onMainFrameLocalLoadError(
+                        WebViewLocalLoadErrorInfo(
+                            failingUrl = failingUrl,
+                            method = request.method,
+                            errorCode = errorCode,
+                            description = description
+                        )
+                    )
                 }
             }
 
@@ -291,6 +298,13 @@ class HomeWebViewController(
 data class WebViewRendererGoneInfo(
     val didCrash: Boolean,
     val rendererPriorityAtExit: Int?
+)
+
+data class WebViewLocalLoadErrorInfo(
+    val failingUrl: String,
+    val method: String,
+    val errorCode: Int?,
+    val description: String?
 )
 
 internal fun WebViewRendererGoneInfo.toDiagnosticText(): String {

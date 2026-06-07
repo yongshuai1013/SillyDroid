@@ -35,4 +35,19 @@ class HomeWebViewControllerTest {
         assertEquals("LOAD_CACHE_ONLY", resolveWebSettingsCacheModeName(WebSettings.LOAD_CACHE_ONLY))
         assertEquals("UNKNOWN", resolveWebSettingsCacheModeName(Int.MIN_VALUE))
     }
+
+    @Test
+    fun `local load error info keeps webview network failure evidence`() {
+        val info = WebViewLocalLoadErrorInfo(
+            failingUrl = "http://127.0.0.1:8000/",
+            method = "GET",
+            errorCode = -6,
+            description = "net::ERR_CONNECTION_REFUSED"
+        )
+
+        assertEquals("http://127.0.0.1:8000/", info.failingUrl)
+        assertEquals("GET", info.method)
+        assertEquals(-6, info.errorCode)
+        assertEquals("net::ERR_CONNECTION_REFUSED", info.description)
+    }
 }

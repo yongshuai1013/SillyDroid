@@ -7,8 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
-import android.os.Bundle
 import android.os.Debug
 import android.os.Handler
 import android.os.Looper
@@ -40,7 +41,7 @@ import com.jm.sillydroid.feature.main.model.download.BrowserDownloadRequest
 import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
 
 /**
- * 把 WebView 与宿主侧下拉刷新、Web 会话持久化、page lifecycle、本地重试、renderer crash 恢复、
+ * 把 WebView 与宿主侧下拉刷新、document-start 脚本注入、page lifecycle、本地重试、renderer crash 恢复、
  * URL 工具函数（local 判断 / 外开浏览器）等收拢到一个 host。
  *
  * MainActivity 持有一个实例，并通过构造参数注入需要的跨 host 回调（JS 桥安装、blob 下载桥脚本、
@@ -69,16 +70,8 @@ class TavernWebViewHost(
 ) {
     companion object {
         private const val LOG_TAG = "SillyDroidMain"
-        private const val WEB_VIEW_STATE_KEY = "tavern.webview.state"
-        private const val LOADED_URL_STATE_KEY = "tavern.webview.loadedUrl"
         private const val SYSTEM_NOTIFICATION_BRIDGE_NAME = "AndroidSystemNotificationBridge"
         private const val ANDROID_HOST_BRIDGE_NAME = "SillyDroidAndroidHostBridge"
-        // 恢复出来的 WebView 以 onPageCommitVisible 作为健康信号；在超时后仍未获得信号
-        // 表示 surface 可能被系统回收成空白，退回 loadUrl 以重新拉起页面。
-        private const val RESTORED_STATE_COMMIT_VISIBLE_TIMEOUT_MS = 6_000L
-        // 部分机型从桌面切回时 WebView URL 会短暂为空或 about:blank；回前台健康检查先延迟确认，避免误刷新。
-        private const val RESUME_WEB_VIEW_HEALTH_CHECK_DELAY_MS = 800L
-
         // 仅 debug 包响应；用来手动踏 renderer-gone 路径。
         // adb shell am broadcast -a com.jm.sillydroid.debug.CRASH_RENDERER -p com.jm.sillydroid
         // adb shell am broadcast -a com.jm.sillydroid.debug.KILL_RENDERER  -p com.jm.sillydroid
@@ -100,7 +93,7 @@ class TavernWebViewHost(
     // 以及在 showWebView / hideForBootstrapRestart 时一并切换可见性，保持一对一互斥。
     private val bootstrapOverlay: android.view.View = activity.findViewById(R.id.bootstrapOverlay)
 
-    private var webSessionPersistenceController: WebSessionPersistenceController? = null
+    private var webDocumentStartScriptController: WebDocumentStartScriptController? = null
 
     private val activityManager by lazy {
         activity.getSystemService(ActivityManager::class.java)
@@ -111,24 +104,13 @@ class TavernWebViewHost(
     }
 
     private var rendererRecoveryActivityRecreateScheduled = false
-    private var pendingResumeHealthCheck: Runnable? = null
-
     private val webReloadTracer by lazy { WebReloadTracer(LOG_TAG) }
-
-    // 恢复 WebView session 后的 commit-visible 守望者；只在 hasRestoredWebViewState 路径上启用。
-    private val restoredWebViewWatchdog = RestoredWebViewWatchdog(
-        scheduler = RestoredWebViewWatchdog.Scheduler { delayMillis, task ->
-            webView.postDelayed(task, delayMillis)
-            RestoredWebViewWatchdog.Cancellable { webView.removeCallbacks(task) }
-        },
-        timeoutMillis = RESTORED_STATE_COMMIT_VISIBLE_TIMEOUT_MS
-    )
 
     private val homeWebViewController by lazy {
         HomeWebViewController(
             context = activity,
             webViewProvider = { webView },
-            installSessionPersistence = ::installWebSessionPersistenceController,
+            installDocumentStartScripts = ::installWebDocumentStartScriptController,
             installJavascriptInterfaces = installJavascriptInterfaces,
             shouldOpenExternally = ::shouldOpenExternally,
             openExternalBrowser = ::openExternalBrowser,
@@ -197,135 +179,6 @@ class TavernWebViewHost(
         )
     }
 
-    fun saveState(outState: Bundle) {
-        // renderer crash 走 Activity.recreate() 时，旧 WebView 可能已经拿不到完整 back/forward stack。
-        // 这里分成两层持久化：
-        // 1) 能拿到完整 WebView state 就保存整包；
-        // 2) 无论成功与否，都额外记住当前 URL，供下一次 onCreate 至少回到原页面而不是首页。
-        val webViewState = Bundle()
-        var saveStateError: Throwable? = null
-        val savedStateList = runCatching { webView.saveState(webViewState) }
-            .onFailure { error ->
-                saveStateError = error
-                Log.w(LOG_TAG, "Failed to save WebView state before Activity recreation.", error)
-            }
-            .getOrNull()
-        val bundleSaved = savedStateList != null && !webViewState.isEmpty
-        if (bundleSaved) {
-            outState.putBundle(WEB_VIEW_STATE_KEY, webViewState)
-        }
-        val fallbackUrl = currentKnownWebViewUrl()
-        outState.putString(LOADED_URL_STATE_KEY, fallbackUrl)
-        recordCriticalHostDiagnostic(
-            category = "webview",
-            body = buildString {
-                append("event=save_state")
-                append(" bundleSaved=$bundleSaved")
-                append(" fallbackUrl=${normalizeDiagnosticValue(fallbackUrl)}")
-                if (saveStateError != null) {
-                    append(" error=${normalizeDiagnosticValue(saveStateError?.message ?: saveStateError?.javaClass?.simpleName)}")
-                }
-                append(' ')
-                append(currentWebViewDiagnosticState())
-            }
-        )
-    }
-
-    fun restoreState(savedInstanceState: Bundle?) {
-        if (savedInstanceState == null) {
-            recordHostDiagnostic(
-                category = "webview",
-                body = "event=restore_state_skipped reason=no_saved_state ${currentWebViewDiagnosticState()}"
-            )
-            return
-        }
-        val persistedLoadedUrl = savedInstanceState.getString(LOADED_URL_STATE_KEY).orEmpty()
-        val webViewState = savedInstanceState.getBundle(WEB_VIEW_STATE_KEY)
-        var restoreStateError: Throwable? = null
-        val restoredState = webViewState?.let { state ->
-            runCatching { webView.restoreState(state) }
-                .onFailure { error ->
-                    restoreStateError = error
-                    Log.w(LOG_TAG, "Failed to restore WebView state after Activity recreation.", error)
-                }
-                .getOrNull()
-        }
-        val restoredUrl = restoredState?.currentItem?.url.orEmpty()
-            .ifBlank { persistedLoadedUrl }
-
-        if (restoredUrl.isBlank()) {
-            recordCriticalHostDiagnostic(
-                category = "webview",
-                body = buildString {
-                    append("event=restore_state_no_url")
-                    append(" bundlePresent=${webViewState != null}")
-                    append(" persistedUrl=${normalizeDiagnosticValue(persistedLoadedUrl)}")
-                    if (restoreStateError != null) {
-                        append(" error=${normalizeDiagnosticValue(restoreStateError?.message ?: restoreStateError?.javaClass?.simpleName)}")
-                    }
-                    append(' ')
-                    append(currentWebViewDiagnosticState())
-                }
-            )
-            return
-        }
-
-        // 恢复出来的 URL 可能在上一轮会话中使用了不同的服务端口。
-        // 若与当前 localUrl 不匹配，则不能复用，避免 WebView 以旧端口发起请求
-        // 造成永久 ERR_CONNECTION_REFUSED 白屏。
-        if (!isLocalTavernUrl(restoredUrl)) {
-            recordCriticalHostDiagnostic(
-                category = "webview",
-                body = buildString {
-                    append("event=restore_state_rejected_non_local")
-                    append(" restoredUrl=${normalizeDiagnosticValue(restoredUrl)}")
-                    append(" persistedUrl=${normalizeDiagnosticValue(persistedLoadedUrl)}")
-                    append(" expectedBaseUrl=${normalizeDiagnosticValue(buildInitialTavernUrl(runtimeConfigRepository.localServiceUrl()))}")
-                    append(' ')
-                    append(currentWebViewDiagnosticState())
-                }
-            )
-            return
-        }
-
-        homeViewModel.loadedUrl = restoredUrl
-        // 只有真正 restore 进了 WebView back/forward stack，后续 showWebView 才能跳过 loadUrl。
-        // 如果这里只剩 URL fallback，就让 showWebView 主动 load 这个 URL，把用户带回崩溃前页面。
-        homeViewModel.hasRestoredWebViewState = restoredState != null
-        if (restoredState == null) {
-            Log.w(
-                LOG_TAG,
-                "Restored Activity with URL fallback only; WebView state bundle unavailable for url=$restoredUrl"
-            )
-            recordCriticalHostDiagnostic(
-                category = "webview",
-                body = buildString {
-                    append("event=restore_state_url_fallback")
-                    append(" restoredUrl=${normalizeDiagnosticValue(restoredUrl)}")
-                    append(" persistedUrl=${normalizeDiagnosticValue(persistedLoadedUrl)}")
-                    append(" bundlePresent=${webViewState != null}")
-                    if (restoreStateError != null) {
-                        append(" error=${normalizeDiagnosticValue(restoreStateError?.message ?: restoreStateError?.javaClass?.simpleName)}")
-                    }
-                    append(' ')
-                    append(currentWebViewDiagnosticState())
-                }
-            )
-            return
-        }
-        recordCriticalHostDiagnostic(
-            category = "webview",
-            body = buildString {
-                append("event=restore_state_success")
-                append(" restoredUrl=${normalizeDiagnosticValue(restoredUrl)}")
-                append(" historySize=${restoredState.size}")
-                append(" persistedUrl=${normalizeDiagnosticValue(persistedLoadedUrl)}")
-                append(' ')
-                append(currentWebViewDiagnosticState())
-            }
-        )
-    }
-
     fun showWebView(baseUrl: String) {
         bootstrapOverlay.isVisible = false
         webViewRefreshLayout.isVisible = true
@@ -335,31 +188,12 @@ class TavernWebViewHost(
             forceFreshWebViewLoad(baseUrl)
             return
         }
-        if (homeViewModel.hasRestoredWebViewState) {
-            // 已恢复出原来的 WebView 会话时，不再重新 load baseUrl，避免把前端状态重置到首页。
-            homeViewModel.hasRestoredWebViewState = false
-            recordCriticalHostDiagnostic(
-                category = "webview",
-                body = buildString {
-                    append("event=show_webview_restored_state")
-                    append(" action=start_watchdog")
-                    append(" baseUrl=${normalizeDiagnosticValue(buildInitialTavernUrl(baseUrl))}")
-                    append(' ')
-                    append(currentWebViewDiagnosticState())
-                }
-            )
-            scheduleRestoredStateWatchdog(baseUrl)
-            return
-        }
 
         if (isCurrentWebViewPageFor(baseUrl)) {
             return
         }
 
-        val targetUrl = resolveInitialTavernUrl(
-            baseUrl = baseUrl,
-            rememberedUrl = homeViewModel.loadedUrl
-        )
+        val targetUrl = buildInitialTavernUrl(baseUrl)
         homeViewModel.loadedUrl = targetUrl
         recordCriticalHostDiagnostic(
             category = "webview",
@@ -375,9 +209,6 @@ class TavernWebViewHost(
     }
 
     fun hideForBootstrapRestart() {
-        // 仅隐藏不重建 WebView 时，恢复态 watchdog 里的 capturedWebView !== webView 门控不会生效；
-        // 必须在这里主动取消，避免 6s 后被 loadUrl 打变 bootstrap 重启流程。
-        cancelRestoredStateWatchdog()
         homeViewModel.isPullGestureRefreshing = false
         homeWebViewRefreshController.reset()
         webViewRefreshLayout.isVisible = false
@@ -396,10 +227,8 @@ class TavernWebViewHost(
         }
         // 清空宿主数据并重解压后，WebView 不能继续复用旧内存页面 / history / cache / sessionStorage；
         // 否则 showWebView 会因为还是同一 local URL 而跳过 loadUrl，用户仍看到旧前端信息。
-        cancelRestoredStateWatchdog()
         homeViewModel.shouldForceFreshWebViewLoad = false
         homeViewModel.browserDataClearMask = 0
-        homeViewModel.hasRestoredWebViewState = false
         homeViewModel.pendingLocalRetryAttempts = 0
         homeViewModel.loadedUrl = targetUrl
         clearCurrentPageSessionState(clearMask)
@@ -446,11 +275,6 @@ class TavernWebViewHost(
         updateRefreshLayoutEnabled()
     }
 
-    fun onResume() {
-        // about:blank 白屏现场已经证明：不能只靠启动阶段判断，Activity 回前台时也要基于真实 WebView URL 复核一次。
-        scheduleResumeWebViewUrlHealthCheck()
-    }
-
     fun onTrimMemory(level: Int) {
         recordCriticalHostDiagnostic(
             category = "memory",
@@ -466,11 +290,9 @@ class TavernWebViewHost(
     }
 
     fun onDestroy() {
-        cancelPendingResumeHealthCheck()
-        cancelRestoredStateWatchdog()
         uninstallDebugRendererCrashReceiver()
-        webSessionPersistenceController?.close()
-        webSessionPersistenceController = null
+        webDocumentStartScriptController?.close()
+        webDocumentStartScriptController = null
         destroyWebViewForActivityTeardown()
     }
 
@@ -609,7 +431,6 @@ class TavernWebViewHost(
             return
         }
         logActiveWebReloadTrace(phase = "page_started", url = url)
-        ensureVisibleWebViewUrlHealth(trigger = "page_started", observedUrl = url)
     }
 
     private fun handleWebViewPageCommitVisible(sourceWebView: WebView, url: String?) {
@@ -617,8 +438,6 @@ class TavernWebViewHost(
             return
         }
         logActiveWebReloadTrace(phase = "page_commit_visible", url = url)
-        cancelRestoredStateWatchdog()
-        ensureVisibleWebViewUrlHealth(trigger = "page_commit_visible", observedUrl = url)
     }
 
     private fun handleWebViewPageFinished(sourceWebView: WebView, url: String?) {
@@ -630,9 +449,6 @@ class TavernWebViewHost(
             return
         }
         logActiveWebReloadTrace(phase = "page_finished", url = url)
-        // 恢复态 watchdog 的首选信号是 onPageCommitVisible；但某些 cache/restore 路径可能不触发。
-        // page_finished 同样代表本次 navigation 跑完，需要兑底取消 watchdog，避免 6s 后多余的 reload。
-        cancelRestoredStateWatchdog()
         homeViewModel.isPullGestureRefreshing = false
         homeWebViewRefreshController.reset()
         updateRefreshLayoutEnabled()
@@ -644,7 +460,6 @@ class TavernWebViewHost(
             homeViewModel.loadedUrl = url
             homeViewModel.pendingLocalRetryAttempts = 0
         }
-        ensureVisibleWebViewUrlHealth(trigger = "page_finished", observedUrl = url)
         clearActiveWebReloadTrace()
     }
 
@@ -902,8 +717,6 @@ class TavernWebViewHost(
         if (recoveryUrl.isNotBlank()) {
             homeViewModel.loadedUrl = recoveryUrl
         }
-        homeViewModel.hasRestoredWebViewState = false
-        cancelRestoredStateWatchdog()
         homeViewModel.isPullGestureRefreshing = false
         homeWebViewRefreshController.reset()
         updateRefreshLayoutEnabled()
@@ -993,9 +806,9 @@ class TavernWebViewHost(
         )
     }
 
-    private fun installWebSessionPersistenceController() {
-        webSessionPersistenceController?.close()
-        webSessionPersistenceController = WebSessionPersistenceController(
+    private fun installWebDocumentStartScriptController() {
+        webDocumentStartScriptController?.close()
+        webDocumentStartScriptController = WebDocumentStartScriptController(
             webView = webView,
             systemNotificationBridgeName = SYSTEM_NOTIFICATION_BRIDGE_NAME,
             androidHostBridgeName = ANDROID_HOST_BRIDGE_NAME,
@@ -1014,7 +827,7 @@ class TavernWebViewHost(
 
     private fun clearPersistedWebSiteState(clearMask: Int) {
         val normalizedClearMask = BrowserDataClearOptions.normalizeOrDefault(clearMask)
-        webSessionPersistenceController?.refreshScript()
+        webDocumentStartScriptController?.refreshScript()
         if (BrowserDataClearOptions.contains(normalizedClearMask, BrowserDataClearTarget.COOKIES)) {
             CookieManager.getInstance().removeAllCookies(null)
             CookieManager.getInstance().flush()
@@ -1051,145 +864,9 @@ class TavernWebViewHost(
         )
     }
 
-    private fun scheduleResumeWebViewUrlHealthCheck() {
-        schedulePendingResumeHealthCheck {
-            ensureVisibleWebViewUrlHealth(trigger = "activity_resume", recoverImmediately = false)
-        }
-    }
-
-    private fun schedulePendingResumeHealthCheck(block: () -> Unit) {
-        cancelPendingResumeHealthCheck()
-        val healthCheck = object : Runnable {
-            override fun run() {
-                if (pendingResumeHealthCheck !== this) {
-                    return
-                }
-                pendingResumeHealthCheck = null
-                block()
-            }
-        }
-        pendingResumeHealthCheck = healthCheck
-        webView.postDelayed(healthCheck, RESUME_WEB_VIEW_HEALTH_CHECK_DELAY_MS)
-    }
-
-    private fun cancelPendingResumeHealthCheck() {
-        val healthCheck = pendingResumeHealthCheck ?: return
-        pendingResumeHealthCheck = null
-        webView.removeCallbacks(healthCheck)
-    }
-
-    private fun ensureVisibleWebViewUrlHealth(
-        trigger: String,
-        observedUrl: String? = null,
-        recoverImmediately: Boolean = true
-    ) {
-        if (!processManager.currentSnapshot().isReady) {
-            return
-        }
-        if (!webView.isVisible || !webViewRefreshLayout.isVisible || bootstrapOverlay.isVisible) {
-            return
-        }
-        if (activity.isFinishing || activity.isDestroyed) {
-            return
-        }
-        // restoreState 刚接管的那几秒由恢复态 watchdog 负责判断 commit-visible，
-        // 这里不抢跑，避免还原 back/forward stack 期间被新的 loadUrl 覆盖掉。
-        if (restoredWebViewWatchdog.isScheduled) {
-            return
-        }
-
-        val expectedBaseUrl = runtimeConfigRepository.localServiceUrl()
-        val currentUrl = webView.url.orEmpty().trim()
-        val healthState = classifyWebViewUrlHealth(currentUrl, expectedBaseUrl)
-        if (healthState == WebViewUrlHealthState.IN_SITE) {
-            return
-        }
-
-        // 正常 local 页面刚开始 load 时，WebView 可能短暂还没把 url 暴露出来；
-        // 这时先让当前 navigation 继续，避免回前台或 pageStarted 初期重复发 loadUrl。
-        if (currentUrl.isBlank() && webView.progress in 1..99) {
-            return
-        }
-
-        if (!recoverImmediately) {
-            recordUnexpectedVisibleWebViewUrl(
-                trigger = trigger,
-                observedUrl = observedUrl,
-                action = "schedule_confirm",
-                currentUrl = currentUrl,
-                expectedBaseUrl = expectedBaseUrl,
-                recoveryUrl = resolveInitialTavernUrl(
-                    baseUrl = expectedBaseUrl,
-                    rememberedUrl = homeViewModel.loadedUrl
-                ),
-                healthState = healthState
-            )
-            schedulePendingResumeHealthCheck {
-                ensureVisibleWebViewUrlHealth(
-                    trigger = "${trigger}_confirm",
-                    observedUrl = currentUrl,
-                    recoverImmediately = true
-                )
-            }
-            return
-        }
-
-        val recoveryUrl = resolveInitialTavernUrl(
-            baseUrl = expectedBaseUrl,
-            rememberedUrl = homeViewModel.loadedUrl
-        )
-        if (!healthState.recoverable) {
-            recordUnexpectedVisibleWebViewUrl(
-                trigger = trigger,
-                observedUrl = observedUrl,
-                action = "record_only",
-                currentUrl = currentUrl,
-                expectedBaseUrl = expectedBaseUrl,
-                recoveryUrl = recoveryUrl,
-                healthState = healthState
-            )
-            return
-        }
-        recordUnexpectedVisibleWebViewUrl(
-            trigger = trigger,
-            observedUrl = observedUrl,
-            action = "load_url",
-            currentUrl = currentUrl,
-            expectedBaseUrl = expectedBaseUrl,
-            recoveryUrl = recoveryUrl,
-            healthState = healthState
-        )
-        homeViewModel.loadedUrl = recoveryUrl
-        webView.loadUrl(recoveryUrl)
-    }
-
-    private fun recordUnexpectedVisibleWebViewUrl(
-        trigger: String,
-        observedUrl: String?,
-        action: String,
-        currentUrl: String,
-        expectedBaseUrl: String,
-        recoveryUrl: String,
-        healthState: WebViewUrlHealthState
-    ) {
-        recordHostDiagnostic(
-            category = "webview",
-            body = buildString {
-                append("event=unexpected_visible_webview_url")
-                append(" trigger=$trigger")
-                append(" action=$action")
-                append(" reason=${healthState.reason}")
-                append(" observedUrl=${normalizeDiagnosticValue(observedUrl)}")
-                append(" targetUrl=${normalizeDiagnosticValue(recoveryUrl)}")
-                append(" expectedBaseUrl=${normalizeDiagnosticValue(buildInitialTavernUrl(expectedBaseUrl))}")
-                append(" currentScheme=${normalizeDiagnosticValue(Uri.parse(currentUrl.ifBlank { "about:blank" }).scheme)}")
-                append(' ')
-                append(currentWebViewDiagnosticState())
-            }
-        )
-    }
-
-    private fun scheduleLocalWebViewRetry(failingUrl: String) {
+    private fun scheduleLocalWebViewRetry(errorInfo: WebViewLocalLoadErrorInfo) {
+        recordMainFrameLocalLoadError(errorInfo)
+        val failingUrl = errorInfo.failingUrl
         if (homeViewModel.pendingLocalRetryAttempts >= 5) {
             // 估计是服务侧長期起不来；交给 startup overlay 接手，不再闪烁。
             recordHostDiagnostic(
@@ -1269,10 +946,56 @@ class TavernWebViewHost(
         )
     }
 
+    private fun recordMainFrameLocalLoadError(errorInfo: WebViewLocalLoadErrorInfo) {
+        val snapshot = processManager.currentSnapshot()
+        // 这条日志专门定位“后台 ready 但 WebView 打不开 127.0.0.1”的现场；
+        // 只在 WebViewClient.onReceivedError 事件触发时记录，不做 URL 轮询或自动改写地址。
+        recordHostDiagnostic(
+            category = "webview",
+            body = buildString {
+                append("event=main_frame_local_url_unreachable")
+                append(" method=${errorInfo.method}")
+                append(" errorCode=${errorInfo.errorCode ?: "-"}")
+                append(" description=${normalizeDiagnosticValue(errorInfo.description)}")
+                append(" failingUrl=${normalizeDiagnosticValue(errorInfo.failingUrl)}")
+                append(" serverReady=${snapshot.isReady}")
+                append(" serverLifecycle=${snapshot.lifecycle}")
+                append(" snapshotLocalUrl=${normalizeDiagnosticValue(snapshot.localUrl)}")
+                append(' ')
+                append(currentNetworkDiagnosticState())
+                append(' ')
+                append(currentWebViewDiagnosticState())
+                append(' ')
+                append(currentHostMemoryDiagnosticState())
+            }
+        )
+    }
+
+    private fun currentNetworkDiagnosticState(): String {
+        val connectivityManager = activity.getSystemService(ConnectivityManager::class.java)
+            ?: return "vpnActive=unknown networkTransports=unknown networkValidated=unknown"
+        val activeNetwork = connectivityManager.activeNetwork
+            ?: return "vpnActive=false networkTransports=none networkValidated=false"
+        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+            ?: return "vpnActive=unknown networkTransports=unknown networkValidated=unknown"
+        val transports = buildList {
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("vpn")
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("wifi")
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("cellular")
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("ethernet")
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) add("bluetooth")
+        }.ifEmpty { listOf("other") }
+        return buildString {
+            append("vpnActive=${capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)}")
+            append(" networkTransports=${transports.joinToString(separator = ",")}")
+            append(" networkValidated=${capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)}")
+        }
+    }
+
     private fun isCurrentWebViewPageFor(baseUrl: String): Boolean {
         // 这里必须只看“当前这一个真实 WebView 实例”已经加载出的 URL。
-        // 如果新建出来的 WebView 还停在 about:blank，却拿 rememberedUrl 当 currentUrl，
-        // 会误判成“页面已在当前站点”并跳过 loadUrl，最终把整页永久留在空白文档。
+        // 如果新建出来的 WebView 还停在 about:blank，不能把任何宿主记录冒充成当前已渲染页面，
+        // 否则会误判成“页面已在当前站点”并跳过 loadUrl，最终把整页永久留在空白文档。
         return hasLoadedCurrentWebViewPageForBaseUrl(
             currentWebViewUrl = webView.url.orEmpty(),
             baseUrl = baseUrl
@@ -1303,52 +1026,6 @@ class TavernWebViewHost(
         webReloadTracer.clear()
     }
 
-    private fun scheduleRestoredStateWatchdog(baseUrl: String) {
-        val targetUrl = homeViewModel.loadedUrl.ifBlank { buildInitialTavernUrl(baseUrl) }
-        val capturedWebView = webView
-        recordCriticalHostDiagnostic(
-            category = "webview",
-            body = buildString {
-                append("event=restored_state_watchdog_started")
-                append(" timeoutMs=$RESTORED_STATE_COMMIT_VISIBLE_TIMEOUT_MS")
-                append(" targetUrl=${normalizeDiagnosticValue(targetUrl)}")
-                append(' ')
-                append(currentWebViewDiagnosticState())
-            }
-        )
-        restoredWebViewWatchdog.start(targetUrl) { url ->
-            // 任务真正运行时再做一次门控，避免在 destroy 或 webView 被替换后误触发。
-            if (activity.isFinishing || activity.isDestroyed) {
-                recordCriticalHostDiagnostic(
-                    category = "webview",
-                    body = "event=restored_state_watchdog_skipped reason=activity_not_alive targetUrl=${normalizeDiagnosticValue(url)} ${currentWebViewDiagnosticState()}"
-                )
-                return@start
-            }
-            if (capturedWebView !== webView) {
-                recordCriticalHostDiagnostic(
-                    category = "webview",
-                    body = "event=restored_state_watchdog_skipped reason=webview_replaced targetUrl=${normalizeDiagnosticValue(url)} ${currentWebViewDiagnosticState()}"
-                )
-                return@start
-            }
-            Log.w(
-                LOG_TAG,
-                "Restored WebView state did not reach onPageCommitVisible within timeout; reloading url=$url"
-            )
-            recordCriticalHostDiagnostic(
-                category = "webview",
-                body = "event=restored_state_watchdog_timeout action=load_url targetUrl=${normalizeDiagnosticValue(url)} ${currentWebViewDiagnosticState()}"
-            )
-            homeViewModel.loadedUrl = url
-            webView.loadUrl(url)
-        }
-    }
-
-    private fun cancelRestoredStateWatchdog() {
-        restoredWebViewWatchdog.cancel()
-    }
-
     // HistoricalProcessExitReasons 在部分机型上不会和 renderer gone 回调严格同步；
     // 这里先立即刷新，再延迟补刷两次，尽量把“刚刚那次 renderer 退出”打进导出的 exit-info 日志。
     private fun scheduleRendererExitInfoRefresh() {
@@ -1376,7 +1053,6 @@ class TavernWebViewHost(
             append("currentUrl=${normalizeDiagnosticValue(webView.url)}")
             append(" rememberedUrl=${normalizeDiagnosticValue(homeViewModel.loadedUrl)}")
             append(" localBaseUrl=${normalizeDiagnosticValue(buildInitialTavernUrl(runtimeConfigRepository.localServiceUrl()))}")
-            append(" restoredStatePending=${homeViewModel.hasRestoredWebViewState}")
             append(" retryAttempts=${homeViewModel.pendingLocalRetryAttempts}")
             append(" webViewVisible=${webView.isVisible}")
             append(" refreshVisible=${webViewRefreshLayout.isVisible}")
@@ -1385,8 +1061,6 @@ class TavernWebViewHost(
             append(" overlayVisible=${bootstrapOverlay.isVisible}")
             append(" activityFinishing=${activity.isFinishing}")
             append(" activityDestroyed=${activity.isDestroyed}")
-            append(" watchdogScheduled=${restoredWebViewWatchdog.isScheduled}")
-            append(" watchdogUrl=${normalizeDiagnosticValue(restoredWebViewWatchdog.pendingUrl)}")
             append(" webViewHardwareAccelerated=${webView.isHardwareAccelerated}")
             append(" webViewLayerType=${resolveViewLayerTypeName(webView.layerType)}")
             append(" webViewCacheMode=${resolveWebSettingsCacheModeName(webView.settings.cacheMode)}")
@@ -1498,23 +1172,13 @@ class TavernWebViewHost(
     }
 }
 
-internal fun resolveInitialTavernUrl(baseUrl: String, rememberedUrl: String): String {
-    val trimmedRememberedUrl = rememberedUrl.trim()
-    return if (trimmedRememberedUrl.isNotBlank() && isTavernUrlForBaseUrl(trimmedRememberedUrl, baseUrl)) {
-        trimmedRememberedUrl
-    } else {
-        buildInitialTavernUrl(baseUrl)
-    }
-}
-
 internal fun hasLoadedCurrentWebViewPageForBaseUrl(currentWebViewUrl: String, baseUrl: String): Boolean {
     val trimmedCurrentWebViewUrl = currentWebViewUrl.trim()
     if (trimmedCurrentWebViewUrl.isBlank()) {
         return false
     }
 
-    // “当前页已加载”判断只允许基于真实 WebView URL 成立；
-    // rememberedUrl 仍然只用于“下一次该 load 什么 URL”，不能反过来冒充当前已渲染页面。
+    // “当前页已加载”判断只允许基于真实 WebView URL 成立。
     return isTavernUrlForBaseUrl(trimmedCurrentWebViewUrl, baseUrl)
 }
 
@@ -1526,55 +1190,6 @@ internal fun isTavernUrlForBaseUrl(url: String, baseUrl: String): Boolean {
         normalizedCurrentUrl.startsWith("$normalizedBaseUrl/#") ||
         normalizedCurrentUrl.startsWith("$normalizedBaseUrl/?") ||
         normalizedCurrentUrl.startsWith("$normalizedBaseUrl/")
-}
-
-internal enum class WebViewUrlHealthState(
-    val reason: String,
-    val recoverable: Boolean
-) {
-    IN_SITE(reason = "in_site", recoverable = false),
-    BLANK(reason = "blank", recoverable = true),
-    ABOUT_BLANK(reason = "about_blank", recoverable = true),
-    ERROR_PAGE(reason = "error_page", recoverable = true),
-    OLD_LOCAL_PORT(reason = "old_local_port", recoverable = true),
-    NON_LOCAL(reason = "non_local", recoverable = false),
-    UNKNOWN(reason = "unknown", recoverable = false)
-}
-
-internal fun classifyWebViewUrlHealth(currentUrl: String, baseUrl: String): WebViewUrlHealthState {
-    val trimmedCurrentUrl = currentUrl.trim()
-    if (isTavernUrlForBaseUrl(trimmedCurrentUrl, baseUrl)) {
-        return WebViewUrlHealthState.IN_SITE
-    }
-    if (trimmedCurrentUrl.isBlank()) {
-        return WebViewUrlHealthState.BLANK
-    }
-    if (trimmedCurrentUrl.equals("about:blank", ignoreCase = true)) {
-        return WebViewUrlHealthState.ABOUT_BLANK
-    }
-
-    val parsedCurrentUrl = runCatching { java.net.URI(trimmedCurrentUrl) }.getOrNull()
-        ?: return WebViewUrlHealthState.UNKNOWN
-    val currentScheme = parsedCurrentUrl.scheme.orEmpty().lowercase()
-    if (currentScheme == "chrome-error") {
-        return WebViewUrlHealthState.ERROR_PAGE
-    }
-
-    val parsedBaseUrl = runCatching { java.net.URI(baseUrl.trim()) }.getOrNull()
-        ?: return WebViewUrlHealthState.UNKNOWN
-    val currentHost = parsedCurrentUrl.host.orEmpty().trim('[', ']')
-    val baseHost = parsedBaseUrl.host.orEmpty().trim('[', ']')
-    val currentIsLoopback = currentHost == "127.0.0.1" || currentHost == "localhost" || currentHost == "::1"
-    val baseIsLoopback = baseHost == "127.0.0.1" || baseHost == "localhost" || baseHost == "::1"
-    if (currentScheme == parsedBaseUrl.scheme.orEmpty().lowercase() && currentIsLoopback && baseIsLoopback) {
-        return WebViewUrlHealthState.OLD_LOCAL_PORT
-    }
-
-    return if (currentScheme == "http" || currentScheme == "https") {
-        WebViewUrlHealthState.NON_LOCAL
-    } else {
-        WebViewUrlHealthState.UNKNOWN
-    }
 }
 
 internal fun buildInitialTavernUrl(baseUrl: String): String {
