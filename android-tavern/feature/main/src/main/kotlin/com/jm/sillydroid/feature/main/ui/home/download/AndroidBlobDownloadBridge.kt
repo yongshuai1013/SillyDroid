@@ -85,6 +85,7 @@ class AndroidBlobDownloadBridge(
         }
     }
 
+    @JavascriptInterface
     fun beginBase64File(payload: String?): Boolean {
         val request = controller.parseChunkedStartRequest(payload)
             ?: throw IllegalArgumentException("empty_or_invalid_chunked_start_payload")
@@ -99,6 +100,7 @@ class AndroidBlobDownloadBridge(
         return true
     }
 
+    @JavascriptInterface
     fun appendBase64FileChunk(payload: String?): Boolean {
         val request = controller.parseChunkRequest(payload)
             ?: throw IllegalArgumentException("empty_or_invalid_chunk_payload")
@@ -111,6 +113,7 @@ class AndroidBlobDownloadBridge(
         return true
     }
 
+    @JavascriptInterface
     fun completeBase64File(payload: String?): Boolean {
         val request = controller.parseChunkedCompleteRequest(payload)
             ?: throw IllegalArgumentException("empty_or_invalid_chunked_complete_payload")
@@ -150,6 +153,7 @@ class AndroidBlobDownloadBridge(
         return true
     }
 
+    @JavascriptInterface
     fun cancelBase64File(payload: String?): Boolean {
         val request = controller.parseChunkedCompleteRequest(payload)
             ?: throw IllegalArgumentException("empty_or_invalid_chunked_cancel_payload")

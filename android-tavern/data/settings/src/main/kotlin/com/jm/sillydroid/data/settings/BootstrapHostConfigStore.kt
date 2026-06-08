@@ -48,16 +48,29 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
             floatingLogRefreshIntervalThreeSecondsMillis,
             floatingLogRefreshIntervalFiveSecondsMillis
         )
+
+        // servicePort 在启动热路径上被反复读取，而 getter 直连 SharedPreferences 会触发同步 disk IO。
+        // 本 App 未声明 android:process 为单进程，但 servicePort 会被多个 store 实例写入，
+        // 所以缓存放在 companion 级别保证进程内跨实例一致，避免实例级缓存互相失真。
+        @Volatile
+        private var cachedServicePort: Int? = null
     }
 
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
 
     override var servicePort: Int
-        get() = sanitizeServicePort(preferences.getInt(servicePortKey, defaultBootstrapServicePort))
+        get() {
+            cachedServicePort?.let { return it }
+            val resolved = sanitizeServicePort(preferences.getInt(servicePortKey, defaultBootstrapServicePort))
+            cachedServicePort = resolved
+            return resolved
+        }
         set(value) {
+            val sanitized = sanitizeServicePort(value)
+            cachedServicePort = sanitized
             preferences.edit()
-                .putInt(servicePortKey, sanitizeServicePort(value))
+                .putInt(servicePortKey, sanitized)
                 .apply()
         }
 

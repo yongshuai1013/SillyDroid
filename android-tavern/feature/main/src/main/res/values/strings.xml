@@ -32,6 +32,14 @@
     <string name="webview_renderer_crash_browser_engine_hint_message">系统 WebView 刚刚发生 renderer 崩溃，页面已自动重新加载。如果这个问题反复出现，可以在设置中把浏览器引擎切换为内置 Gecko 内核。</string>
     <string name="webview_renderer_crash_browser_engine_hint_open_settings">打开设置</string>
     <string name="webview_renderer_crash_browser_engine_hint_later">稍后</string>
+    <string name="webview_document_start_unsupported_hint_title">当前 WebView 功能受限</string>
+    <string name="webview_document_start_unsupported_hint_message">当前系统 WebView 版本不支持页面启动阶段脚本注入，部分宿主增强（开屏样式、系统通知、页面下载接管）可能不生效。建议更新系统 WebView，或在设置中把浏览器引擎切换为内置 Gecko 内核。</string>
+    <string name="webview_document_start_unsupported_hint_open_settings">打开设置</string>
+    <string name="webview_document_start_unsupported_hint_later">知道了</string>
+    <string name="browser_unavailable_title">系统 WebView 暂不可用</string>
+    <string name="browser_unavailable_message">系统浏览器内核正在释放资源，或被上一次清理残留锁占用。可以稍后重试，或在设置中切换为内置 Gecko 内核。</string>
+    <string name="browser_unavailable_open_settings">打开设置</string>
+    <string name="browser_unavailable_open_external">在系统浏览器打开</string>
     <string name="geckoview_choice_prompt_title">请选择</string>
     <string name="floating_logs_bubble_description">打开或收起宿主快捷面板</string>
     <string name="floating_logs_panel_title">实时日志</string>

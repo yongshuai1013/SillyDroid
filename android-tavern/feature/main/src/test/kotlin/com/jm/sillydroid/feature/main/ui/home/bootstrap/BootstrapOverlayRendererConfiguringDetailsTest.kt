@@ -21,6 +21,7 @@ class BootstrapOverlayRendererConfiguringDetailsTest {
                 overlay = mock(),
                 status = statusView,
                 retryButton = mock(),
+                topActionBar = mock(),
                 settingsButton = mock(),
                 progress = mock(),
                 progressLabel = mock(),

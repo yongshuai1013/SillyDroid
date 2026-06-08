@@ -25,6 +25,7 @@ class BootstrapOverlayRendererTest {
         webViewRef: () -> WebView,
         overlay: View = mock(),
         refreshLayout: View = mock(),
+        topActionBar: View = mock(),
         onShowWebView: (String) -> Unit = {},
         shouldLaunchWebViewOnReady: () -> Boolean = { true },
         openExternalBrowserForBackgroundOnly: (BootstrapSessionSnapshot) -> Unit = {},
@@ -35,6 +36,7 @@ class BootstrapOverlayRendererTest {
             overlay = overlay,
             status = mock<TextView>().also { whenever(it.text).thenReturn("") },
             retryButton = mock<Button>(),
+            topActionBar = topActionBar,
             settingsButton = mock<ImageButton>(),
             progress = mock<ProgressBar>(),
             progressLabel = mock<TextView>(),
@@ -124,6 +126,47 @@ class BootstrapOverlayRendererTest {
         )
 
         org.junit.Assert.assertEquals("http://127.0.0.1:8000/", shownUrl)
+    }
+
+    @Test
+    fun `ready state hides bootstrap top action bar when webView is shown`() {
+        val webView = mock<WebView>()
+        val topActionBar = mock<View>()
+
+        val renderer = newRenderer(
+            webViewRef = { webView },
+            topActionBar = topActionBar
+        )
+
+        renderer.render(
+            BootstrapSessionSnapshot(
+                lifecycle = BootstrapLifecycle.READY_MONITORING,
+                localUrl = "http://127.0.0.1:8000/",
+                derivedUiFlags = BootstrapDerivedUiFlags(showWebView = true, showBootstrapOverlay = false)
+            )
+        )
+
+        verify(topActionBar).visibility = View.GONE
+    }
+
+    @Test
+    fun `startup state shows bootstrap top action bar with settings layer`() {
+        val webView = mock<WebView>()
+        val topActionBar = mock<View>()
+
+        val renderer = newRenderer(
+            webViewRef = { webView },
+            topActionBar = topActionBar
+        )
+
+        renderer.render(
+            BootstrapSessionSnapshot(
+                lifecycle = BootstrapLifecycle.RUNNING,
+                derivedUiFlags = BootstrapDerivedUiFlags(showWebView = false, showBootstrapOverlay = true)
+            )
+        )
+
+        verify(topActionBar).visibility = View.VISIBLE
     }
 
     @Test

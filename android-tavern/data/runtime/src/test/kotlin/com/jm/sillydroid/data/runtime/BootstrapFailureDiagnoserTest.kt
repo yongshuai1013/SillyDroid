@@ -70,6 +70,21 @@ class BootstrapFailureDiagnoserTest {
     }
 
     @Test
+    fun `prepared asset directory missing files points to reextract guidance`() {
+        val diagnosis = BootstrapFailureDiagnoser.diagnose(
+            stepId = BootstrapStepId.VALIDATE_RUNTIME_LAYOUT,
+            stageTitle = "校验运行时布局",
+            details = "server 目录缺少必要文件：node/bin/node, server.js",
+            errorKind = BootstrapError.Generic::class.simpleName,
+            logFileName = "startup.log",
+            logExcerpt = ""
+        )
+
+        assertTrue(diagnosis.suspectedReason.contains("关键文件"))
+        assertTrue(diagnosis.solutions.any { solution -> solution.contains("清除本应用数据") })
+    }
+
+    @Test
     fun `termux host native linker failure points to runtime assets`() {
         val diagnosis = BootstrapFailureDiagnoser.diagnose(
             stepId = BootstrapStepId.ENSURE_ROOTFS_RUNTIME,

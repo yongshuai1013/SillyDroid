@@ -44,17 +44,6 @@ import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeInstaller
 import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeTarget
 import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
 
-/**
- * 把 WebView 与宿主侧下拉刷新、document-start 脚本注入、page lifecycle、本地重试、renderer crash 恢复、
- * URL 工具函数（local 判断 / 外开浏览器）等收拢到一个 host。
- *
- * MainActivity 持有一个实例，并通过构造参数注入需要的跨 host 回调（JS 桥安装、blob 下载桥脚本、
- * 文件选择器、下载行为、外部回到 ready 时的 prompt 等）。
- */
-fun interface HostDiagnosticSink {
-    fun record(category: String, body: String)
-}
-
 class TavernWebViewHost(
     private val activity: AppCompatActivity,
     private val homeViewModel: HomeViewModel,
@@ -71,6 +60,7 @@ class TavernWebViewHost(
     private val refreshApplicationExitInfo: () -> Unit = {},
     private val uploadRendererGoneLogBundle: (WebViewRendererGoneInfo) -> Unit = {},
     private val onWebViewRendererCrash: () -> Unit = {},
+    private val onDocumentStartScriptUnsupported: () -> Unit = {},
 ) : TavernBrowserHost {
     companion object {
         private const val LOG_TAG = "SillyDroidMain"
@@ -330,6 +320,9 @@ class TavernWebViewHost(
     }
 
     override fun onDestroy() {
+        // renderer gone 后安排的 exit-info 延迟刷新（postDelayed 1.5s/5s）必须随 Activity 销毁一并取消；
+        // 否则回调会落到已销毁的宿主上下文，造成无意义的后台 exit-info 刷新与潜在泄漏。
+        mainHandler.removeCallbacksAndMessages(null)
         uninstallDebugRendererCrashReceiver()
         webDocumentStartScriptController?.close()
         webDocumentStartScriptController = null
@@ -1283,6 +1276,8 @@ class TavernWebViewHost(
                     category = "webview",
                     body = "event=document_start_script_skipped reason=unsupported_feature ${currentWebViewDiagnosticState()}"
                 )
+                // 静默降级用户无感知；这里请求一次性提示，告知增强能力不可用并给出可操作路径。
+                onDocumentStartScriptUnsupported()
             }
         }
     }

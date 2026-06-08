@@ -34,7 +34,10 @@ class BootstrapOverlayRenderer(
         }
         views.progress.isVisible = snapshot.derivedUiFlags.showProgress
         views.progressLabel.isVisible = views.progress.isVisible
-        views.settingsButton.isVisible = !shouldShowWebView
+        // 更新入口和设置入口属于启动 overlay 顶栏，只在启动/配置/失败阶段显示；
+        // Tavern 浏览器就绪后必须整体隐藏，避免更新提示漂浮覆盖 WebView/GeckoView 内容。
+        views.topActionBar.isVisible = !shouldShowWebView
+        views.settingsButton.isVisible = views.topActionBar.isVisible
         syncSettingsEntryState(snapshot)
         renderProgress(snapshot)
 
@@ -173,6 +176,7 @@ data class BootstrapOverlayViews(
     val overlay: View,
     val status: TextView,
     val retryButton: Button,
+    val topActionBar: View,
     val settingsButton: ImageButton,
     val progress: ProgressBar,
     val progressLabel: TextView,

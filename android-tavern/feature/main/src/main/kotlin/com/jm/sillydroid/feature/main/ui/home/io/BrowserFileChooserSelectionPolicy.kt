@@ -133,6 +133,13 @@ internal object BrowserFileChooserSelectionPolicy {
         return expandedAcceptTokens.toTypedArray()
     }
 
+    fun resolveAndroidIntentMimeTypes(acceptTypes: Array<String>): Array<String> {
+        val mimeTypes = normalizeAcceptTokens(acceptTypes)
+            .filter { acceptToken -> acceptToken.isAndroidIntentMimeType() }
+            .ifEmpty { listOf("*/*") }
+        return mimeTypes.toTypedArray()
+    }
+
     fun shouldForceSelectionFilter(acceptTokens: List<String>, forceAcceptTokenSelectionFilter: Boolean): Boolean {
         return forceAcceptTokenSelectionFilter && acceptTokens.any { acceptToken -> acceptToken.startsWith(".") }
     }
@@ -178,6 +185,11 @@ internal object BrowserFileChooserSelectionPolicy {
             return token.drop(1)
         }
         return token
+    }
+
+    private fun String.isAndroidIntentMimeType(): Boolean {
+        val token = trim()
+        return token == "*/*" || (token.contains('/') && !token.startsWith(".") && !token.contains(','))
     }
 
     private fun displayNameMatchesMimeAlias(displayName: String, mimeType: String): Boolean {

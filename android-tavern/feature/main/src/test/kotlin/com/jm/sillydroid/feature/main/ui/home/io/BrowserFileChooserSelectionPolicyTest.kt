@@ -1,6 +1,7 @@
 package com.jm.sillydroid.feature.main.ui.home.io
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -115,5 +116,14 @@ class BrowserFileChooserSelectionPolicyTest {
         assertTrue(BrowserFileChooserSelectionPolicy.accepts(audioTokens, "voice.wav", "application/octet-stream"))
         assertTrue(BrowserFileChooserSelectionPolicy.accepts(audioTokens, "voice.opus", "application/octet-stream"))
         assertFalse(BrowserFileChooserSelectionPolicy.accepts(audioTokens, "world.json", "application/json"))
+    }
+
+    @Test
+    fun `geckoview chooser mime types split comma separated prompt tokens`() {
+        val mimeTypes = BrowserFileChooserSelectionPolicy.resolveAndroidIntentMimeTypes(
+            arrayOf("application/json,image/png,.charx")
+        )
+
+        assertArrayEquals(arrayOf("application/json", "image/png"), mimeTypes)
     }
 }

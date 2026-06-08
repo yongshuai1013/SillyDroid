@@ -104,6 +104,7 @@ internal object BootstrapFailureDiagnoser {
             containsAny(
                 evidence,
                 "bootstrap 资产缺少关键文件",
+                "缺少必要文件",
                 "启动脚本不存在",
                 "缺少 Termux Node 入口",
                 "缺少 Termux Git 入口",
@@ -116,6 +117,7 @@ internal object BootstrapFailureDiagnoser {
                 title = "当前启动阶段缺少必要的 runtime/server 关键文件。",
                 solutions = listOf(
                     "重新同步 android-tavern 的离线运行时与 server payload 资产后再启动。",
+                    "若资产可能因上次解压中断而不完整，在系统设置里清除本应用数据后重新打开，让宿主重新完整解压。",
                     "如果设备上曾手动删除 android-tavern 目录，重新安装应用或清空后让宿主完整解压。"
                 )
             )

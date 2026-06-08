@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import com.jm.sillydroid.core.model.notification.HostForegroundBehavior
 import com.jm.sillydroid.core.model.notification.HostNotificationChannel
 import com.jm.sillydroid.core.model.notification.HostNotificationKind
@@ -25,6 +26,7 @@ import kotlinx.coroutines.launch
 
 class StartupCoordinatorService : Service() {
     companion object {
+        private const val LOG_TAG = "SillyDroidStartup"
         private const val ACTION_START = "com.jm.sillydroid.action.START"
         private const val ACTION_RETRY = "com.jm.sillydroid.action.RETRY"
         private const val ACTION_STOP_FOR_SETTINGS = "com.jm.sillydroid.action.STOP_FOR_SETTINGS"
@@ -65,7 +67,13 @@ class StartupCoordinatorService : Service() {
             hostPreferences = graph.hostConfigStore,
             settingsConfig = graph.tavernConfigRepository(),
             onSnapshotChanged = { snapshot ->
-                hostNotificationService.postForeground(this@StartupCoordinatorService, buildForegroundNotificationSpec(snapshot))
+                // 前台通知的进度更新在边缘时序下也可能触发前台启动限制异常；
+                // 已运行会话的通知刷新失败不致命，这里只记录并跳过本次更新。
+                runCatching {
+                    hostNotificationService.postForeground(this@StartupCoordinatorService, buildForegroundNotificationSpec(snapshot))
+                }.onFailure { error ->
+                    Log.w(LOG_TAG, "Foreground notification update failed.", error)
+                }
             }
         )
     }
@@ -91,10 +99,19 @@ class StartupCoordinatorService : Service() {
         val retry = intent?.action == ACTION_RETRY
         // 前台通知必须走统一通知服务的 foreground 入口：
         // 这里不直接 startForeground / notify，避免启动阶段和 ready 阶段出现两套更新语义。
-        hostNotificationService.postForeground(
-            this,
-            buildForegroundNotificationSpec(BootstrapSessionRuntimeStore.snapshot.value)
-        )
+        try {
+            hostNotificationService.postForeground(
+                this,
+                buildForegroundNotificationSpec(BootstrapSessionRuntimeStore.snapshot.value)
+            )
+        } catch (error: Exception) {
+            // Android 12+ 从后台路径启动前台服务可能被系统拒绝（如 ForegroundServiceStartNotAllowedException）。
+            // 此时无法满足 startForegroundService 的前台契约，必须主动 stopSelf，
+            // 否则系统会在数秒后以未进前台为由从系统侧强杀进程；下次用户前台打开会重新拉起。
+            Log.w(LOG_TAG, "Foreground start was not allowed; stopping service.", error)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         sessionManager.start(forceRestart = retry)
         return START_STICKY
     }

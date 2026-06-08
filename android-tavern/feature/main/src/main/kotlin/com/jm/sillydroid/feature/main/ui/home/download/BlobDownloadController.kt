@@ -29,6 +29,12 @@ class BlobDownloadController(
     private val contentResolver: ContentResolver,
     private val chunkTempDirectory: File
 ) {
+    internal companion object {
+        // 每块按原始字节切片而不是先生成完整 base64；144 KiB 是 3 的倍数，
+        // 拼接后的 base64 没有中间 padding，宿主侧可以严格校验总长度。
+        const val WEBVIEW_BLOB_RAW_CHUNK_SIZE_BYTES: Int = 144 * 1024
+    }
+
     private data class ChunkedDownloadSession(
         val downloadId: String,
         val fileName: String,
@@ -73,11 +79,17 @@ class BlobDownloadController(
         )
     }
 
-    private fun buildBridgeScript(bridgeName: String): String {
+    internal fun buildBridgeScript(bridgeName: String): String {
         return """
             (function() {
               const nativeBridge = window.$bridgeName;
-              if (!nativeBridge || typeof nativeBridge.saveBase64File !== 'function') {
+              if (
+                !nativeBridge ||
+                typeof nativeBridge.beginBase64File !== 'function' ||
+                typeof nativeBridge.appendBase64FileChunk !== 'function' ||
+                typeof nativeBridge.completeBase64File !== 'function' ||
+                typeof nativeBridge.cancelBase64File !== 'function'
+              ) {
                 return;
               }
 
@@ -138,7 +150,9 @@ class BlobDownloadController(
                 return originalRevokeObjectUrl(objectUrl);
               };
 
-              function readBlobAsBase64(blob) {
+              const rawChunkSize = $WEBVIEW_BLOB_RAW_CHUNK_SIZE_BYTES;
+
+              function readBlobSliceAsBase64(blobSlice) {
                 return new Promise(function(resolve, reject) {
                   const reader = new FileReader();
                   reader.onloadend = function() {
@@ -153,8 +167,59 @@ class BlobDownloadController(
                   reader.onerror = function() {
                     reject(reader.error || new Error('无法读取导出数据'));
                   };
-                  reader.readAsDataURL(blob);
+                  reader.readAsDataURL(blobSlice);
                 });
+              }
+
+              function resolveDownloadId() {
+                return 'webview-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+              }
+
+              function expectedBase64Length(byteLength) {
+                return Math.ceil(byteLength / 3) * 4;
+              }
+
+              async function saveBlobChunked(fileName, mimeType, blob) {
+                if (!blob || typeof blob.slice !== 'function') {
+                  throw new Error('导出数据不是可读取文件');
+                }
+                const totalBytes = Number.isFinite(blob.size) ? blob.size : 0;
+                const chunkCount = Math.ceil(totalBytes / rawChunkSize);
+                const downloadId = resolveDownloadId();
+                const basePayload = {
+                  downloadId: downloadId,
+                  fileName: fileName,
+                  mimeType: mimeType || 'application/octet-stream'
+                };
+                try {
+                  nativeBridge.beginBase64File(JSON.stringify({
+                    downloadId: downloadId,
+                    fileName: basePayload.fileName,
+                    mimeType: basePayload.mimeType,
+                    totalBase64Length: expectedBase64Length(totalBytes),
+                    chunkCount: chunkCount
+                  }));
+                  for (let index = 0; index < chunkCount; index += 1) {
+                    const start = index * rawChunkSize;
+                    const end = Math.min(totalBytes, start + rawChunkSize);
+                    const base64 = await readBlobSliceAsBase64(blob.slice(start, end));
+                    nativeBridge.appendBase64FileChunk(JSON.stringify({
+                      downloadId: downloadId,
+                      index: index,
+                      base64: base64
+                    }));
+                  }
+                  nativeBridge.completeBase64File(JSON.stringify(basePayload));
+                } catch (error) {
+                  try {
+                    nativeBridge.cancelBase64File(JSON.stringify({
+                      downloadId: downloadId,
+                      fileName: fileName,
+                      message: error && error.message ? error.message : '导出失败'
+                    }));
+                  } catch (_) {}
+                  throw error;
+                }
               }
 
               function resolveBlob(href) {
@@ -190,13 +255,7 @@ class BlobDownloadController(
                       throw new Error('未找到导出数据');
                     }
 
-                    return readBlobAsBase64(blob).then(function(base64) {
-                      nativeBridge.saveBase64File(JSON.stringify({
-                        fileName: fileName,
-                        mimeType: blob.type || '',
-                        base64: base64
-                      }));
-                    });
+                    return saveBlobChunked(fileName, blob.type || '', blob);
                   })
                   .catch(function(error) {
                     nativeBridge.reportDownloadFailure(JSON.stringify({
@@ -273,7 +332,13 @@ class BlobDownloadController(
               const downloadUrl = ${JSONObject.quote(request.url)};
               const fileNameHint = ${JSONObject.quote(fileNameHint)};
 
-              if (!nativeBridge || typeof nativeBridge.saveBase64File !== 'function') {
+              if (
+                !nativeBridge ||
+                typeof nativeBridge.beginBase64File !== 'function' ||
+                typeof nativeBridge.appendBase64FileChunk !== 'function' ||
+                typeof nativeBridge.completeBase64File !== 'function' ||
+                typeof nativeBridge.cancelBase64File !== 'function'
+              ) {
                 return JSON.stringify({ status: 'bridge_missing' });
               }
 
@@ -285,7 +350,9 @@ class BlobDownloadController(
                 });
               }
 
-              function readBlobAsBase64(blob) {
+              const rawChunkSize = $WEBVIEW_BLOB_RAW_CHUNK_SIZE_BYTES;
+
+              function readBlobSliceAsBase64(blobSlice) {
                 return new Promise(function(resolve, reject) {
                   const reader = new FileReader();
                   reader.onloadend = function() {
@@ -300,21 +367,66 @@ class BlobDownloadController(
                   reader.onerror = function() {
                     reject(reader.error || new Error('无法读取导出数据'));
                   };
-                  reader.readAsDataURL(blob);
+                  reader.readAsDataURL(blobSlice);
                 });
+              }
+
+              function resolveDownloadId() {
+                return 'webview-listener-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+              }
+
+              function expectedBase64Length(byteLength) {
+                return Math.ceil(byteLength / 3) * 4;
+              }
+
+              async function saveBlobChunked(fileName, mimeType, blob) {
+                if (!blob || typeof blob.slice !== 'function') {
+                  throw new Error('导出数据不是可读取文件');
+                }
+                const totalBytes = Number.isFinite(blob.size) ? blob.size : 0;
+                const chunkCount = Math.ceil(totalBytes / rawChunkSize);
+                const downloadId = resolveDownloadId();
+                const basePayload = {
+                  downloadId: downloadId,
+                  fileName: fileName,
+                  mimeType: mimeType || 'application/octet-stream'
+                };
+                try {
+                  nativeBridge.beginBase64File(JSON.stringify({
+                    downloadId: downloadId,
+                    fileName: basePayload.fileName,
+                    mimeType: basePayload.mimeType,
+                    totalBase64Length: expectedBase64Length(totalBytes),
+                    chunkCount: chunkCount
+                  }));
+                  for (let index = 0; index < chunkCount; index += 1) {
+                    const start = index * rawChunkSize;
+                    const end = Math.min(totalBytes, start + rawChunkSize);
+                    const base64 = await readBlobSliceAsBase64(blob.slice(start, end));
+                    nativeBridge.appendBase64FileChunk(JSON.stringify({
+                      downloadId: downloadId,
+                      index: index,
+                      base64: base64
+                    }));
+                  }
+                  nativeBridge.completeBase64File(JSON.stringify(basePayload));
+                } catch (error) {
+                  try {
+                    nativeBridge.cancelBase64File(JSON.stringify({
+                      downloadId: downloadId,
+                      fileName: fileName,
+                      message: error && error.message ? error.message : '导出失败'
+                    }));
+                  } catch (_) {}
+                  throw error;
+                }
               }
 
               nativeBridge.onBlobDownloadPreparing(fileNameHint);
               fetch(downloadUrl)
                 .then(function(response) { return response.blob(); })
                 .then(function(blob) {
-                  return readBlobAsBase64(blob).then(function(base64) {
-                    nativeBridge.saveBase64File(JSON.stringify({
-                      fileName: fileNameHint,
-                      mimeType: blob.type || ${JSONObject.quote(request.mimeType)},
-                      base64: base64
-                    }));
-                  });
+                  return saveBlobChunked(fileNameHint, blob.type || ${JSONObject.quote(request.mimeType)}, blob);
                 })
                 .catch(function(error) {
                   nativeBridge.reportDownloadFailure(JSON.stringify({

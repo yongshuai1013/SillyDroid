@@ -3,6 +3,8 @@ package com.jm.sillydroid.feature.main.ui.home.webview
 import android.webkit.WebSettings
 import android.webkit.WebView
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeWebViewControllerTest {
@@ -49,5 +51,44 @@ class HomeWebViewControllerTest {
         assertEquals("GET", info.method)
         assertEquals(-6, info.errorCode)
         assertEquals("net::ERR_CONNECTION_REFUSED", info.description)
+    }
+
+    @Test
+    fun `renderer cleanup while activity is finishing is not auto uploaded as crash`() {
+        val info = WebViewRendererGoneInfo(didCrash = false, rendererPriorityAtExit = null)
+
+        assertFalse(
+            shouldAutoUploadRendererGoneBundle(
+                info = info,
+                activityFinishing = true,
+                activityDestroyed = false
+            )
+        )
+    }
+
+    @Test
+    fun `renderer crash is auto uploaded even if activity is finishing`() {
+        val info = WebViewRendererGoneInfo(didCrash = true, rendererPriorityAtExit = null)
+
+        assertTrue(
+            shouldAutoUploadRendererGoneBundle(
+                info = info,
+                activityFinishing = true,
+                activityDestroyed = true
+            )
+        )
+    }
+
+    @Test
+    fun `foreground renderer non crash exit is still auto uploaded`() {
+        val info = WebViewRendererGoneInfo(didCrash = false, rendererPriorityAtExit = null)
+
+        assertTrue(
+            shouldAutoUploadRendererGoneBundle(
+                info = info,
+                activityFinishing = false,
+                activityDestroyed = false
+            )
+        )
     }
 }

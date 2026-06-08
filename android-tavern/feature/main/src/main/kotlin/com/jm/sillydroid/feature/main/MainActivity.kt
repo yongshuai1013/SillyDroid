@@ -38,12 +38,15 @@ import com.jm.sillydroid.feature.main.ui.home.floatinglogs.FloatingLogsHost
 import com.jm.sillydroid.feature.main.ui.home.io.HostIoController
 import com.jm.sillydroid.feature.main.ui.home.system.SystemBarInsetsController
 import com.jm.sillydroid.feature.main.ui.home.system.resolveMainHostDisplayMode
+import com.jm.sillydroid.feature.main.ui.home.webview.DisabledBrowserHost
 import com.jm.sillydroid.feature.main.ui.home.webview.HostDiagnosticSink
 import com.jm.sillydroid.feature.main.ui.home.webview.TavernBrowserHost
 import com.jm.sillydroid.feature.main.ui.home.webview.TavernGeckoViewHost
 import com.jm.sillydroid.feature.main.ui.home.webview.TavernWebViewHost
+import com.jm.sillydroid.feature.main.ui.home.webview.UnavailableBrowserHost
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRendererGoneInfo
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRuntimeCompatibility
+import com.jm.sillydroid.feature.main.ui.home.webview.shouldAutoUploadRendererGoneBundle
 import com.jm.sillydroid.feature.main.ui.home.webview.toDiagnosticText
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -320,6 +323,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeShowWebViewRendererCrashBrowserEngineHint() {
         if (!homeViewModel.consumeWebViewRendererCrashBrowserEngineHint()) {
+            maybeShowWebViewDocumentStartUnsupportedHint()
             return
         }
         if (isFinishing || isDestroyed) {
@@ -336,6 +340,35 @@ class MainActivity : AppCompatActivity() {
         recordDefaultHostDiagnostic(
             category = "webview",
             body = "event=renderer_crash_browser_engine_hint_shown"
+        )
+    }
+
+    private fun requestWebViewDocumentStartUnsupportedHint() {
+        homeViewModel.requestWebViewDocumentStartUnsupportedHint()
+        recordDefaultHostDiagnostic(
+            category = "webview",
+            body = "event=document_start_unsupported_hint_requested"
+        )
+    }
+
+    private fun maybeShowWebViewDocumentStartUnsupportedHint() {
+        if (!homeViewModel.consumeWebViewDocumentStartUnsupportedHint()) {
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.webview_document_start_unsupported_hint_title)
+            .setMessage(R.string.webview_document_start_unsupported_hint_message)
+            .setNegativeButton(R.string.webview_document_start_unsupported_hint_later, null)
+            .setPositiveButton(R.string.webview_document_start_unsupported_hint_open_settings) { _, _ ->
+                bootstrapOverlayHost.openBootstrapSettings()
+            }
+            .show()
+        recordDefaultHostDiagnostic(
+            category = "webview",
+            body = "event=document_start_unsupported_hint_shown"
         )
     }
 
@@ -430,6 +463,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun uploadRendererGoneLogBundle(info: WebViewRendererGoneInfo) {
+        if (!shouldAutoUploadRendererGoneBundle(info, activityFinishing = isFinishing, activityDestroyed = isDestroyed)) {
+            recordDefaultHostDiagnostic(
+                category = "log_upload",
+                body = "event=auto_upload_skipped reason=renderer_cleanup_noise trigger=webview_renderer_gone didCrash=${info.didCrash} activityFinishing=$isFinishing activityDestroyed=$isDestroyed"
+            )
+            return
+        }
         if (!hostConfigStore.crashLogUploadEnabled) {
             recordDefaultHostDiagnostic(
                 category = "log_upload",
@@ -472,6 +512,15 @@ class MainActivity : AppCompatActivity() {
         "webview_renderer_gone:${System.currentTimeMillis()}"
 
     private fun createBrowserHost(): TavernBrowserHost {
+        if (!shouldUseWebViewSurface()) {
+            return DisabledBrowserHost(
+                activity = this,
+                browserEngine = hostConfigStore.browserEngine,
+                criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
+                    recordDefaultHostDiagnostic(category = category, body = body)
+                }
+            )
+        }
         return when (hostConfigStore.browserEngine) {
             BrowserEngine.SYSTEM_WEBVIEW -> createSystemWebViewHost()
             BrowserEngine.GECKOVIEW -> createGeckoViewHost()
@@ -479,27 +528,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createSystemWebViewHost(): TavernBrowserHost {
-        return TavernWebViewHost(
-            activity = this,
-            homeViewModel = homeViewModel,
-            hostConfigStore = hostConfigStore,
-            runtimeConfigRepository = runtimeConfigRepository,
-            processManager = processManager,
-            bridgeInstaller = createBrowserBridgeInstaller(BrowserEngine.SYSTEM_WEBVIEW),
-            restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
-            onDownloadRequested = { request -> hostIo.handlePageDownload(request) },
-            onShowFileChooser = { fileChooserParams, callback -> hostIo.launchFileChooser(fileChooserParams, callback) },
-            jsErrorSink = ::recordDetailedWebViewJsError,
-            hostDiagnosticSink = HostDiagnosticSink { category, body ->
-                recordDetailedHostDiagnostic(category = category, body = body)
-            },
-            criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
-                recordDefaultHostDiagnostic(category = category, body = body)
-            },
-            refreshApplicationExitInfo = { hostLogRepository.refreshApplicationExitInfoAsync() },
-            uploadRendererGoneLogBundle = ::uploadRendererGoneLogBundle,
-            onWebViewRendererCrash = ::requestWebViewRendererCrashBrowserEngineHint
-        )
+        return runCatching {
+            TavernWebViewHost(
+                activity = this,
+                homeViewModel = homeViewModel,
+                hostConfigStore = hostConfigStore,
+                runtimeConfigRepository = runtimeConfigRepository,
+                processManager = processManager,
+                bridgeInstaller = createBrowserBridgeInstaller(BrowserEngine.SYSTEM_WEBVIEW),
+                restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
+                onDownloadRequested = { request -> hostIo.handlePageDownload(request) },
+                onShowFileChooser = { fileChooserParams, callback -> hostIo.launchFileChooser(fileChooserParams, callback) },
+                jsErrorSink = ::recordDetailedWebViewJsError,
+                hostDiagnosticSink = HostDiagnosticSink { category, body ->
+                    recordDetailedHostDiagnostic(category = category, body = body)
+                },
+                criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
+                    recordDefaultHostDiagnostic(category = category, body = body)
+                },
+                refreshApplicationExitInfo = { hostLogRepository.refreshApplicationExitInfoAsync() },
+                uploadRendererGoneLogBundle = ::uploadRendererGoneLogBundle,
+                onWebViewRendererCrash = ::requestWebViewRendererCrashBrowserEngineHint,
+                onDocumentStartScriptUnsupported = ::requestWebViewDocumentStartUnsupportedHint
+            )
+        }.getOrElse { error ->
+            recordDefaultHostDiagnostic(
+                category = "browser",
+                body = "event=system_webview_host_create_failed reason=${error.javaClass.name} message=${error.message.orEmpty()}"
+            )
+            UnavailableBrowserHost(
+                activity = this,
+                browserEngine = BrowserEngine.SYSTEM_WEBVIEW,
+                unavailableReason = error,
+                openSettings = {
+                    if (::bootstrapOverlayHost.isInitialized) {
+                        bootstrapOverlayHost.openBootstrapSettings()
+                    }
+                },
+                restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
+                criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
+                    recordDefaultHostDiagnostic(category = category, body = body)
+                }
+            )
+        }
     }
 
     private fun createGeckoViewHost(): TavernBrowserHost {
@@ -513,6 +584,8 @@ class MainActivity : AppCompatActivity() {
             restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
             onDownloadRequested = { request -> hostIo.handleBrowserResponseDownload(request) },
             onShowFileChooser = { request, callback -> hostIo.launchFileChooser(request, callback) },
+            scope = lifecycleScope,
+            ioDispatcher = appGraph.dispatchers.io,
             hostDiagnosticSink = HostDiagnosticSink { category, body ->
                 recordDetailedHostDiagnostic(category = category, body = body)
             },

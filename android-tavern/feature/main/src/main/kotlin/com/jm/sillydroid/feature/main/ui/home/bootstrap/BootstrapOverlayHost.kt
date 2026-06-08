@@ -52,6 +52,7 @@ class BootstrapOverlayHost(
     private val overlay: View = activity.findViewById(R.id.bootstrapOverlay)
     private val status: TextView = activity.findViewById(R.id.bootstrapStatus)
     private val retryButton: Button = activity.findViewById(R.id.bootstrapRetry)
+    private val topActionBar: View = activity.findViewById(R.id.bootstrapTopActionBar)
     private val updateButtonContainer: View = activity.findViewById(R.id.bootstrapUpdateButtonContainer)
     private val updateButton: ImageButton = activity.findViewById(R.id.bootstrapUpdateButton)
     private val updateBadge: View = activity.findViewById(R.id.bootstrapUpdateBadge)
@@ -68,6 +69,7 @@ class BootstrapOverlayHost(
                 overlay = overlay,
                 status = status,
                 retryButton = retryButton,
+                topActionBar = topActionBar,
                 settingsButton = settingsButton,
                 progress = progress,
                 progressLabel = progressLabel,

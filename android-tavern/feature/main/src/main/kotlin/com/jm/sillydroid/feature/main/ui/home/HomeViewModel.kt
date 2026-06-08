@@ -46,6 +46,7 @@ class HomeViewModel(
     var isImeVisible: Boolean = false
     var backgroundOnlyExternalBrowserAttemptKey: String = ""
     private var pendingWebViewRendererCrashBrowserEngineHint: Boolean = false
+    private var pendingWebViewDocumentStartUnsupportedHint: Boolean = false
 
     init {
         viewModelScope.launch {
@@ -69,6 +70,18 @@ class HomeViewModel(
             return false
         }
         pendingWebViewRendererCrashBrowserEngineHint = false
+        return true
+    }
+
+    fun requestWebViewDocumentStartUnsupportedHint() {
+        pendingWebViewDocumentStartUnsupportedHint = true
+    }
+
+    fun consumeWebViewDocumentStartUnsupportedHint(): Boolean {
+        if (!pendingWebViewDocumentStartUnsupportedHint) {
+            return false
+        }
+        pendingWebViewDocumentStartUnsupportedHint = false
         return true
     }
 

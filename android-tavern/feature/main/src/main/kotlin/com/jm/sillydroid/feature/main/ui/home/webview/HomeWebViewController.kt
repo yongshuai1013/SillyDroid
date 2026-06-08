@@ -300,6 +300,16 @@ data class WebViewRendererGoneInfo(
     val rendererPriorityAtExit: Int?
 )
 
+internal fun shouldAutoUploadRendererGoneBundle(
+    info: WebViewRendererGoneInfo,
+    activityFinishing: Boolean,
+    activityDestroyed: Boolean
+): Boolean {
+    // 用户/系统正在结束 Activity 时触发的 didCrash=false 通常是 SwipeUpClean 这类清理噪声；
+    // 真实 renderer crash 和前台 renderer 非崩溃退出仍保留自动上传，避免漏掉影响会话的现场。
+    return info.didCrash || (!activityFinishing && !activityDestroyed)
+}
+
 data class WebViewLocalLoadErrorInfo(
     val failingUrl: String,
     val method: String,

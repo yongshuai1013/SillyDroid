@@ -35,7 +35,11 @@ import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
 import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeInstaller
 import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeTarget
 import com.jm.sillydroid.feature.main.ui.home.io.BrowserFileChooserSelectionPolicy
+import com.jm.sillydroid.feature.main.ui.home.io.GeckoFilePromptUriMaterializer
 import com.jm.sillydroid.feature.main.ui.home.io.HostIoController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.BuildConfig as GeckoBuildConfig
 import org.mozilla.geckoview.GeckoResult
@@ -66,8 +70,11 @@ class TavernGeckoViewHost(
     private val restoreHostSystemBarAppearance: () -> Unit = {},
     private val onDownloadRequested: (BrowserResponseDownloadRequest) -> Unit,
     private val onShowFileChooser: (HostIoController.BrowserFileChooserRequest, (Array<Uri>?) -> Unit) -> Unit,
+    private val scope: CoroutineScope,
+    private val ioDispatcher: kotlin.coroutines.CoroutineContext,
     private val hostDiagnosticSink: HostDiagnosticSink = HostDiagnosticSink { _, _ -> },
     private val criticalHostDiagnosticSink: HostDiagnosticSink = HostDiagnosticSink { _, _ -> },
+    private val filePromptUriMaterializer: GeckoFilePromptUriMaterializer = GeckoFilePromptUriMaterializer(activity),
 ) : TavernBrowserHost {
     companion object {
         private var sharedRuntime: GeckoRuntime? = null
@@ -168,6 +175,7 @@ class TavernGeckoViewHost(
         session.open(runtime(activity))
         geckoView.setSession(session)
         bridgeInstaller.install(buildBridgeTarget())
+        filePromptUriMaterializer.cleanPreparedFiles()
         setBrowserZoomPercent(hostConfigStore.browserZoomPercent)
         restoreHostSystemBarAppearance()
         recordHostDiagnostic(
@@ -288,6 +296,7 @@ class TavernGeckoViewHost(
             body = "event=destroy_geckoview_started ${currentGeckoDiagnosticState()} ${currentHostMemoryDiagnosticState()}"
         )
         bridgeInstaller.close()
+        filePromptUriMaterializer.cleanPreparedFiles()
         runCatching { session.stop() }
         runCatching { session.setActive(false) }
         runCatching { session.setFocused(false) }
@@ -503,30 +512,9 @@ class TavernGeckoViewHost(
                 val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
                 try {
                     onShowFileChooser(buildFileChooserRequest(prompt)) { selectedUris ->
-                        val acceptedUris = when {
-                            selectedUris == null -> null
-                            prompt.type == GeckoSession.PromptDelegate.FilePrompt.Type.MULTIPLE -> selectedUris
-                            selectedUris.isNotEmpty() -> arrayOf(selectedUris.first())
-                            else -> emptyArray()
+                        scope.launch {
+                            result.complete(completeFilePrompt(prompt = prompt, selectedUris = selectedUris))
                         }
-                        val response = runCatching {
-                            if (acceptedUris.isNullOrEmpty()) {
-                                prompt.dismiss()
-                            } else {
-                                prompt.confirm(activity, acceptedUris)
-                            }
-                        }.getOrElse { error ->
-                            recordCriticalHostDiagnostic(
-                                category = "geckoview",
-                                body = "event=file_prompt_response_failed error=${error.javaClass.simpleName} message=${normalizeDiagnosticValue(error.message)} selectedCount=${acceptedUris?.size ?: 0}"
-                            )
-                            prompt.dismiss()
-                        }
-                        recordCriticalHostDiagnostic(
-                            category = "geckoview",
-                            body = "event=file_prompt_completed selectedCount=${acceptedUris?.size ?: 0}"
-                        )
-                        result.complete(response)
                     }
                 } catch (error: Exception) {
                     recordCriticalHostDiagnostic(
@@ -538,6 +526,64 @@ class TavernGeckoViewHost(
                 return result
             }
         }
+    }
+
+    private suspend fun completeFilePrompt(
+        prompt: GeckoSession.PromptDelegate.FilePrompt,
+        selectedUris: Array<Uri>?
+    ): GeckoSession.PromptDelegate.PromptResponse {
+        val acceptedUris = when {
+            selectedUris == null -> null
+            prompt.type == GeckoSession.PromptDelegate.FilePrompt.Type.MULTIPLE -> selectedUris
+            selectedUris.isNotEmpty() -> arrayOf(selectedUris.first())
+            else -> emptyArray()
+        }
+        val preparedUris = runCatching {
+            when {
+                acceptedUris == null || acceptedUris.isEmpty() -> acceptedUris
+                else -> withContext(ioDispatcher) {
+                    filePromptUriMaterializer.materialize(acceptedUris).uris
+                }
+            }
+        }.onSuccess { prepared ->
+            if (acceptedUris != null && prepared != null) {
+                recordCriticalHostDiagnostic(
+                    category = "geckoview",
+                    body = "event=file_prompt_uris_materialized selectedCount=${acceptedUris.size} preparedCount=${prepared.size}"
+                )
+            }
+        }.getOrElse { error ->
+            recordCriticalHostDiagnostic(
+                category = "geckoview",
+                body = "event=file_prompt_uri_materialize_failed error=${error.javaClass.simpleName} message=${normalizeDiagnosticValue(error.message)} selectedCount=${acceptedUris?.size ?: 0}"
+            )
+            null
+        }
+        val response = runCatching {
+            when {
+                preparedUris == null -> prompt.dismiss()
+                prompt.type == GeckoSession.PromptDelegate.FilePrompt.Type.MULTIPLE -> {
+                    if (preparedUris.isEmpty()) {
+                        prompt.dismiss()
+                    } else {
+                        prompt.confirm(activity, preparedUris)
+                    }
+                }
+                preparedUris.isNotEmpty() -> prompt.confirm(activity, preparedUris.first())
+                else -> prompt.dismiss()
+            }
+        }.getOrElse { error ->
+            recordCriticalHostDiagnostic(
+                category = "geckoview",
+                body = "event=file_prompt_response_failed error=${error.javaClass.simpleName} message=${normalizeDiagnosticValue(error.message)} selectedCount=${preparedUris?.size ?: 0}"
+            )
+            prompt.dismiss()
+        }
+        recordCriticalHostDiagnostic(
+            category = "geckoview",
+            body = "event=file_prompt_completed selectedCount=${preparedUris?.size ?: 0}"
+        )
+        return response
     }
 
     private fun isAllowedLocalContentPermission(permission: Int): Boolean {
@@ -755,10 +801,7 @@ class TavernGeckoViewHost(
             ?.takeIf { values -> values.isNotEmpty() }
             ?.toTypedArray()
             ?: arrayOf("*/*")
-        val chooserMimeTypes = acceptTokens
-            .filter { token -> token.isAndroidIntentMimeType() }
-            .ifEmpty { listOf("*/*") }
-            .toTypedArray()
+        val chooserMimeTypes = BrowserFileChooserSelectionPolicy.resolveAndroidIntentMimeTypes(acceptTokens)
         val acceptTypes = BrowserFileChooserSelectionPolicy.expandGeckoPromptAcceptTypes(acceptTokens)
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -779,11 +822,6 @@ class TavernGeckoViewHost(
             allowMultiple = prompt.type == GeckoSession.PromptDelegate.FilePrompt.Type.MULTIPLE,
             forceAcceptTokenSelectionFilter = acceptTypes.any { token -> token.startsWith(".") }
         )
-    }
-
-    private fun String.isAndroidIntentMimeType(): Boolean {
-        val token = trim()
-        return token == "*/*" || (token.contains('/') && !token.startsWith("."))
     }
 
     private data class GeckoChoicePromptEntry(
