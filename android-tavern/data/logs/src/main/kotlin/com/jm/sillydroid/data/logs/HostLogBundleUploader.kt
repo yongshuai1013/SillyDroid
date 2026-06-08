@@ -2,6 +2,7 @@ package com.jm.sillydroid.data.logs
 
 import android.content.Context
 import android.os.Build
+import android.webkit.WebView
 import com.jm.sillydroid.core.model.logs.HostLogBundleUploadRequestConfig
 import com.jm.sillydroid.core.model.logs.HostLogBundleUploadResult
 import java.io.File
@@ -66,6 +67,7 @@ internal class HostLogBundleUploader(
                 writeField("installationId", metadataProvider.installationId())
                 writeField("deviceModel", metadataProvider.deviceModel())
                 writeField("androidVersion", metadataProvider.androidVersion())
+                writeField("browserVersion", metadataProvider.browserVersion())
                 writeField("abi", metadataProvider.abi())
                 writeField("buildFingerprint", metadataProvider.buildFingerprint())
                 writeField("crashType", config.crashType)
@@ -141,6 +143,7 @@ internal interface HostLogUploadMetadataProvider {
     fun installationId(): String
     fun deviceModel(): String
     fun androidVersion(): String
+    fun browserVersion(): String?
     fun abi(): String?
     fun buildFingerprint(): String?
 }
@@ -168,6 +171,13 @@ private class AndroidHostLogUploadMetadataProvider(context: Context) : HostLogUp
     override fun deviceModel(): String = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
 
     override fun androidVersion(): String = Build.VERSION.RELEASE
+
+    override fun browserVersion(): String? {
+        return runCatching { WebView.getCurrentWebViewPackage()?.versionName }
+            .getOrNull()
+            ?.trim()
+            ?.ifBlank { null }
+    }
 
     override fun abi(): String? = Build.SUPPORTED_ABIS.firstOrNull()
 

@@ -266,6 +266,10 @@ android {
             "SILLYDROID_CRASH_LOG_UPLOAD_WRITER_API_KEY",
             quoteBuildConfigString(System.getenv("SILLYDROID_CRASH_LOG_UPLOAD_WRITER_API_KEY").orEmpty().trim())
         )
+        ndk {
+            // Stage 运行时目前只支持 linux-arm64，APK 也只打包 arm64 native 库，避免 GeckoView 带入其它 ABI。
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {

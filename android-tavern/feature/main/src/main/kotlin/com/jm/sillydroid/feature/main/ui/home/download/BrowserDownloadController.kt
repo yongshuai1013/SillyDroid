@@ -54,8 +54,18 @@ class BrowserDownloadController(
             recordDiagnostic(
                 "event=browser_download_delegate_blob_capture scheme=${Uri.parse(targetUrl).scheme.orEmpty()} fileName=$fileName url=$targetUrl"
             )
+            val sourceWebView = request.sourceWebView
+            if (sourceWebView == null) {
+                recordDiagnostic(
+                    "event=browser_download_failed reason=missing_source_webview_for_blob_capture scheme=${Uri.parse(targetUrl).scheme.orEmpty()} fileName=$fileName url=$targetUrl"
+                )
+                return BrowserDownloadResult.Failed(
+                    fileName = fileName,
+                    message = "当前浏览器内核暂不支持 blob/data 导出接管"
+                )
+            }
             blobController.captureFromDownloadListener(
-                webView = request.sourceWebView,
+                webView = sourceWebView,
                 bridgeName = bridgeName,
                 request = request,
                 diagnosticSink = ::recordDiagnostic

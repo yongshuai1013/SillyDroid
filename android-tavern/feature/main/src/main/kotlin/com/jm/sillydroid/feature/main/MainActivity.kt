@@ -7,9 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.webkit.WebView
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.annotation.ColorInt
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +20,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.jm.sillydroid.core.model.logs.HostLogBundleUploadRequestConfig
+import com.jm.sillydroid.core.model.settings.BrowserEngine
+import com.jm.sillydroid.core.model.settings.BrowserZoomOptions
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.core.ui.window.SystemBarAppearanceController
 import com.jm.sillydroid.domain.app.SillyDroidAppGraph
@@ -30,15 +30,17 @@ import com.jm.sillydroid.domain.bootstrap.BootstrapController
 import com.jm.sillydroid.feature.main.diagnostics.formatTrimMemoryLevel
 import com.jm.sillydroid.feature.main.ui.extensions.DefaultExtensionsInstallerLauncher
 import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeActions
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeInstaller
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeInstallerFactory
 import com.jm.sillydroid.feature.main.ui.home.bootstrap.BootstrapOverlayHost
-import com.jm.sillydroid.feature.main.ui.home.download.AndroidBlobDownloadBridge
 import com.jm.sillydroid.feature.main.ui.home.floatinglogs.FloatingLogsHost
 import com.jm.sillydroid.feature.main.ui.home.io.HostIoController
-import com.jm.sillydroid.feature.main.ui.home.notification.AndroidSystemNotificationBridge
 import com.jm.sillydroid.feature.main.ui.home.system.SystemBarInsetsController
 import com.jm.sillydroid.feature.main.ui.home.system.resolveMainHostDisplayMode
-import com.jm.sillydroid.feature.main.ui.home.webview.AndroidHostBridge
 import com.jm.sillydroid.feature.main.ui.home.webview.HostDiagnosticSink
+import com.jm.sillydroid.feature.main.ui.home.webview.TavernBrowserHost
+import com.jm.sillydroid.feature.main.ui.home.webview.TavernGeckoViewHost
 import com.jm.sillydroid.feature.main.ui.home.webview.TavernWebViewHost
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRendererGoneInfo
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRuntimeCompatibility
@@ -48,23 +50,17 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * MainActivity 现在只做"装配"：构造五个 host（FloatingLogs / BootstrapOverlay / TavernWebView /
+ * MainActivity 现在只做"装配"：构造五个 host（FloatingLogs / BootstrapOverlay / TavernBrowser /
  * HostIo / SystemBarInsets），把它们之间的回调线连起来，剩下的视图字段、状态、controller、
  * launcher 全在各自 host 内部。
  *
  * 跨 host 的关键回调：
- *  - WebView 的 JS 桥安装由 [installWebViewJavascriptInterfaces] 拼装：blob 下载（HostIo）、
+ *  - 浏览器内核桥接由 BrowserHostBridgeInstaller 拼装：blob 下载（HostIo）、
  *    系统通知（HostIo）、宿主能力桥（含 FloatingLogs / BootstrapOverlay）。
- *  - SystemBarInsets 的 IME 变化通知 TavernWebView 暂停下拉刷新。
+ *  - SystemBarInsets 的 IME 变化通知 TavernBrowser 暂停下拉刷新。
  *  - SystemBarInsets 的 bounds 变化通知 FloatingLogs 重新计算可视范围。
  */
 class MainActivity : AppCompatActivity() {
-    private companion object {
-        private const val downloadBridgeName = "AndroidDownloadBridge"
-        private const val systemNotificationBridgeName = "AndroidSystemNotificationBridge"
-        private const val androidHostBridgeName = "SillyDroidAndroidHostBridge"
-    }
-
     private lateinit var contentRoot: android.view.View
     private lateinit var statusBarBackground: android.view.View
     private lateinit var navigationBarBackground: android.view.View
@@ -80,7 +76,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var hostIo: HostIoController
     private lateinit var floatingLogsHost: FloatingLogsHost
-    private lateinit var webViewHost: TavernWebViewHost
+    private lateinit var browserHost: TavernBrowserHost
     private lateinit var bootstrapOverlayHost: BootstrapOverlayHost
     private lateinit var systemBarInsetsController: SystemBarInsetsController
     private var lastWebViewSystemBarsColorHex: String? = null
@@ -112,13 +108,15 @@ class MainActivity : AppCompatActivity() {
         composeHosts()
         bootstrapOverlayHost.installAppUpdateCoordinator()
         installSystemUi()
-        installWebViewStack()
+        installBrowserStack()
         installBootstrapWiring()
         if (shouldUseWebViewSurface()) {
             inspectWebViewRuntimeBeforeBootstrap()
         }
         bootstrapOverlayHost.startBootstrap(false)
-        maybePromptCrashLogUploadConsent()
+        if (!maybePromptCrashLogUploadConsent()) {
+            maybeShowWebViewRendererCrashBrowserEngineHint()
+        }
     }
 
     private fun composeHosts() {
@@ -128,9 +126,13 @@ class MainActivity : AppCompatActivity() {
             hostPreferencesRepository = hostConfigStore,
             hostNotificationService = appGraph.hostNotificationService,
             hostDownloadNotificationCoordinator = appGraph.hostDownloadNotificationCoordinator,
-            blobDownloadBridgeName = downloadBridgeName,
+            scope = lifecycleScope,
+            dispatchers = appGraph.dispatchers,
             downloadDiagnosticSink = { body ->
                 recordDetailedHostDiagnostic(category = "download", body = body)
+            },
+            hostDiagnosticSink = { category, body ->
+                recordDefaultHostDiagnostic(category = category, body = body)
             }
         )
         floatingLogsHost = FloatingLogsHost(
@@ -142,8 +144,9 @@ class MainActivity : AppCompatActivity() {
             currentSnapshot = { processManager.currentSnapshot() },
             canOpenSettings = { snapshot -> bootstrapOverlayHost.canOpenBootstrapSettings(snapshot) },
             openSettings = { bootstrapOverlayHost.openBootstrapSettings() },
-            openCurrentPageInBrowser = { webViewHost.openCurrentPageInExternalBrowser() },
-            reloadTavernWebView = { webViewHost.reloadTavernWebView(source = "floating_logs_button") },
+            openCurrentPageInBrowser = { browserHost.openCurrentPageInExternalBrowser() },
+            reloadTavernWebView = { browserHost.reloadTavernWebView(source = "floating_logs_button") },
+            applyBrowserZoomPercent = ::applyBrowserZoomPercentFromFloatingLogs,
             feedbackImageLauncher = feedbackImageLauncher,
             feedbackUploadConfig = {
                 HostLogBundleUploadRequestConfig(
@@ -155,41 +158,22 @@ class MainActivity : AppCompatActivity() {
             },
             recordHostDiagnostic = ::recordDefaultHostDiagnostic
         )
-        webViewHost = TavernWebViewHost(
-            activity = this,
-            homeViewModel = homeViewModel,
-            hostConfigStore = hostConfigStore,
-            runtimeConfigRepository = runtimeConfigRepository,
-            processManager = processManager,
-            installJavascriptInterfaces = ::installWebViewJavascriptInterfaces,
-            installBlobBridgeScriptOnPageFinished = { webView ->
-                hostIo.blobDownloadController.installBridgeScript(
-                    webView = webView,
-                    bridgeName = downloadBridgeName,
-                    allowedOrigin = runtimeConfigRepository.localServiceUrl()
-                )
-            },
-            restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
-            onDownloadRequested = { request -> hostIo.handlePageDownload(request) },
-            onShowFileChooser = { fileChooserParams, callback -> hostIo.launchFileChooser(fileChooserParams, callback) },
-            jsErrorSink = ::recordDetailedWebViewJsError,
-            hostDiagnosticSink = HostDiagnosticSink { category, body ->
-                recordDetailedHostDiagnostic(category = category, body = body)
-            },
-            criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
-                recordDefaultHostDiagnostic(category = category, body = body)
-            },
-            refreshApplicationExitInfo = { hostLogRepository.refreshApplicationExitInfoAsync() },
-            uploadRendererGoneLogBundle = ::uploadRendererGoneLogBundle
-        )
+        browserHost = createBrowserHost()
         bootstrapOverlayHost = BootstrapOverlayHost(
             activity = this,
             homeViewModel = homeViewModel,
             processManager = processManager,
             appGraph = appGraph,
-            webViewHost = webViewHost,
+            browserHost = browserHost,
             floatingLogsHost = floatingLogsHost,
-            onMaybePromptDefaultExtensionsAfterBootstrapReady = ::maybePromptDefaultExtensionsAfterBootstrapReady
+            onMaybePromptDefaultExtensionsAfterBootstrapReady = ::maybePromptDefaultExtensionsAfterBootstrapReady,
+            recreateMainActivityForBrowserEngineChange = {
+                recordDefaultHostDiagnostic(
+                    category = "browser",
+                    body = "event=browser_engine_change_recreate_requested currentEngine=${browserHost.browserEngine.name} configuredEngine=${hostConfigStore.browserEngine.name}"
+                )
+                recreate()
+            }
         )
         systemBarInsetsController = SystemBarInsetsController(
             contentRoot = contentRoot,
@@ -197,7 +181,7 @@ class MainActivity : AppCompatActivity() {
             navigationBarBackground = navigationBarBackground,
             homeViewModel = homeViewModel,
             displayModeProvider = { effectiveMainDisplayMode() },
-            onImeChanged = { visible -> webViewHost.onImeVisibilityChanged(visible) },
+            onImeChanged = { visible -> browserHost.onImeVisibilityChanged(visible) },
             onContentBoundsChanged = { floatingLogsHost.onContentBoundsChanged() }
         )
     }
@@ -210,13 +194,13 @@ class MainActivity : AppCompatActivity() {
         hostIo.requestNotificationPermissionIfNeeded()
     }
 
-    private fun installWebViewStack() {
+    private fun installBrowserStack() {
         if (!shouldUseWebViewSurface()) {
-            // 纯后台模式只启动本地 Tavern 服务；不配置也不加载宿主 WebView 页面。
+            // 纯后台模式只启动本地 Tavern 服务；不配置也不加载宿主浏览器页面。
             registerBackPressHandler()
             return
         }
-        webViewHost.configure()
+        browserHost.configure()
         registerBackPressHandler()
     }
 
@@ -230,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         reapplyCurrentSystemBars()
         floatingLogsHost.refreshVisibility()
         if (shouldUseWebViewSurface()) {
-            webViewHost.updateRefreshLayoutEnabled()
+            browserHost.updateRefreshLayoutEnabled()
         }
     }
 
@@ -245,9 +229,11 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         recordActivityLifecycleDiagnostic(
             event = "on_destroy",
-            extra = "webViewHostInitialized=${::webViewHost.isInitialized} changingConfigMask=$changingConfigurations"
+            extra = "browserHostInitialized=${::browserHost.isInitialized} changingConfigMask=$changingConfigurations"
         )
-        webViewHost.onDestroy()
+        if (::browserHost.isInitialized) {
+            browserHost.onDestroy()
+        }
         hostIo.cancelPendingFileChooser()
         hostIo.blobDownloadController.close()
         super.onDestroy()
@@ -259,16 +245,16 @@ class MainActivity : AppCompatActivity() {
             event = "on_trim_memory",
             extra = "level=${formatTrimMemoryLevel(level)} rawLevel=$level"
         )
-        if (::webViewHost.isInitialized) {
-            webViewHost.onTrimMemory(level)
+        if (::browserHost.isInitialized) {
+            browserHost.onTrimMemory(level)
         }
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
         recordActivityLifecycleDiagnostic(event = "on_low_memory")
-        if (::webViewHost.isInitialized) {
-            webViewHost.onLowMemory()
+        if (::browserHost.isInitialized) {
+            browserHost.onLowMemory()
         }
     }
 
@@ -289,10 +275,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun shouldUseWebViewSurface(): Boolean = hostConfigStore.launchWebViewOnReady
 
-    private fun maybePromptCrashLogUploadConsent() {
+    private fun maybePromptCrashLogUploadConsent(): Boolean {
         if (hostConfigStore.crashLogUploadPromptConsumed) {
             uploadPendingCrashLogBundle(trigger = "app_start")
-            return
+            return false
         }
 
         MaterialAlertDialogBuilder(this)
@@ -307,6 +293,7 @@ class MainActivity : AppCompatActivity() {
                     category = "log_upload",
                     body = "event=crash_log_upload_consent_decided enabled=false promptConsumed=true"
                 )
+                maybeShowWebViewRendererCrashBrowserEngineHint()
             }
             .setPositiveButton(R.string.crash_log_upload_consent_accept) { _, _ ->
                 hostConfigStore.crashLogUploadEnabled = true
@@ -317,8 +304,39 @@ class MainActivity : AppCompatActivity() {
                     body = "event=crash_log_upload_consent_decided enabled=true promptConsumed=true"
                 )
                 uploadPendingCrashLogBundle(trigger = "post_consent")
+                maybeShowWebViewRendererCrashBrowserEngineHint()
             }
             .show()
+        return true
+    }
+
+    private fun requestWebViewRendererCrashBrowserEngineHint() {
+        homeViewModel.requestWebViewRendererCrashBrowserEngineHint()
+        recordDefaultHostDiagnostic(
+            category = "webview",
+            body = "event=renderer_crash_browser_engine_hint_requested"
+        )
+    }
+
+    private fun maybeShowWebViewRendererCrashBrowserEngineHint() {
+        if (!homeViewModel.consumeWebViewRendererCrashBrowserEngineHint()) {
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.webview_renderer_crash_browser_engine_hint_title)
+            .setMessage(R.string.webview_renderer_crash_browser_engine_hint_message)
+            .setNegativeButton(R.string.webview_renderer_crash_browser_engine_hint_later, null)
+            .setPositiveButton(R.string.webview_renderer_crash_browser_engine_hint_open_settings) { _, _ ->
+                bootstrapOverlayHost.openBootstrapSettings()
+            }
+            .show()
+        recordDefaultHostDiagnostic(
+            category = "webview",
+            body = "event=renderer_crash_browser_engine_hint_shown"
+        )
     }
 
     private fun uploadPendingCrashLogBundle(trigger: String) {
@@ -453,80 +471,94 @@ class MainActivity : AppCompatActivity() {
         // 同一标志会在下一次启动上传成功后清理，上传失败则保留到后续启动继续补刷。
         "webview_renderer_gone:${System.currentTimeMillis()}"
 
-    private fun installWebViewJavascriptInterfaces(targetWebView: WebView) {
-        // Tavern 页面里的导出既可能是普通 URL，也可能是 blob/data；宿主在这里统一接管保存到系统下载目录。
-        targetWebView.addJavascriptInterface(
-            AndroidBlobDownloadBridge(
-                controller = hostIo.blobDownloadController,
-                scope = lifecycleScope,
-                dispatchers = appGraph.dispatchers,
-                runOnUiThread = { action -> runOnUiThread(action) },
-                unknownErrorMessage = { getString(R.string.download_failed_unknown) },
-                emptyPayloadMessage = { getString(R.string.download_failed_empty_payload) },
-                onPreparing = { fileName ->
-                    Toast.makeText(this, getString(R.string.download_status_preparing, fileName), Toast.LENGTH_SHORT).show()
-                },
-                onSaving = { fileName ->
-                    Toast.makeText(this, getString(R.string.download_status_saving, fileName), Toast.LENGTH_SHORT).show()
-                },
-                onSaved = { savedFile ->
-                    // blob/data 导出没有 DownloadManager downloadId；保存完成后直接交给既有下载通知协调器发统一通知。
-                    appGraph.hostDownloadNotificationCoordinator.postBrowserDownloadSaved(
-                        fileName = savedFile.fileName,
-                        mimeType = savedFile.mimeType,
-                        contentUri = savedFile.contentUri,
-                        displayPath = savedFile.displayPath
-                    )
-                    Toast.makeText(this, getString(R.string.download_saved, savedFile.fileName), Toast.LENGTH_SHORT).show()
-                },
-                onFailure = hostIo::showDownloadFailure,
-                diagnosticSink = { body ->
-                    recordDetailedHostDiagnostic(category = "download", body = body)
+    private fun createBrowserHost(): TavernBrowserHost {
+        return when (hostConfigStore.browserEngine) {
+            BrowserEngine.SYSTEM_WEBVIEW -> createSystemWebViewHost()
+            BrowserEngine.GECKOVIEW -> createGeckoViewHost()
+        }
+    }
+
+    private fun createSystemWebViewHost(): TavernBrowserHost {
+        return TavernWebViewHost(
+            activity = this,
+            homeViewModel = homeViewModel,
+            hostConfigStore = hostConfigStore,
+            runtimeConfigRepository = runtimeConfigRepository,
+            processManager = processManager,
+            bridgeInstaller = createBrowserBridgeInstaller(BrowserEngine.SYSTEM_WEBVIEW),
+            restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
+            onDownloadRequested = { request -> hostIo.handlePageDownload(request) },
+            onShowFileChooser = { fileChooserParams, callback -> hostIo.launchFileChooser(fileChooserParams, callback) },
+            jsErrorSink = ::recordDetailedWebViewJsError,
+            hostDiagnosticSink = HostDiagnosticSink { category, body ->
+                recordDetailedHostDiagnostic(category = category, body = body)
+            },
+            criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
+                recordDefaultHostDiagnostic(category = category, body = body)
+            },
+            refreshApplicationExitInfo = { hostLogRepository.refreshApplicationExitInfoAsync() },
+            uploadRendererGoneLogBundle = ::uploadRendererGoneLogBundle,
+            onWebViewRendererCrash = ::requestWebViewRendererCrashBrowserEngineHint
+        )
+    }
+
+    private fun createGeckoViewHost(): TavernBrowserHost {
+        return TavernGeckoViewHost(
+            activity = this,
+            homeViewModel = homeViewModel,
+            hostConfigStore = hostConfigStore,
+            runtimeConfigRepository = runtimeConfigRepository,
+            processManager = processManager,
+            bridgeInstaller = createBrowserBridgeInstaller(BrowserEngine.GECKOVIEW),
+            restoreHostSystemBarAppearance = ::applyHostSurfaceSystemBars,
+            onDownloadRequested = { request -> hostIo.handleBrowserResponseDownload(request) },
+            onShowFileChooser = { request, callback -> hostIo.launchFileChooser(request, callback) },
+            hostDiagnosticSink = HostDiagnosticSink { category, body ->
+                recordDetailedHostDiagnostic(category = category, body = body)
+            },
+            criticalHostDiagnosticSink = HostDiagnosticSink { category, body ->
+                recordDefaultHostDiagnostic(category = category, body = body)
+            }
+        )
+    }
+
+    private fun createBrowserBridgeInstaller(browserEngine: BrowserEngine): BrowserHostBridgeInstaller {
+        return BrowserHostBridgeInstallerFactory(
+            activity = this,
+            hostIo = hostIo,
+            downloadNotificationCoordinator = appGraph.hostDownloadNotificationCoordinator,
+            actions = createBrowserHostBridgeActions(),
+            scope = lifecycleScope,
+            dispatchers = appGraph.dispatchers,
+            diagnosticSink = { category, body ->
+                if (category == "download") {
+                    recordDetailedHostDiagnostic(category = category, body = body)
+                } else {
+                    recordDefaultHostDiagnostic(category = category, body = body)
                 }
-            ),
-            downloadBridgeName
-        )
-        // 角色导出这类 blob 下载要求在页面脚本执行前就接管 createObjectURL/blob 响应；
-        // 这里先注册 document-start 脚本，再由 pageFinished 对当前可见页面补打一遍。
-        hostIo.blobDownloadController.installBridgeScript(
-            webView = targetWebView,
-            bridgeName = downloadBridgeName,
-            allowedOrigin = runtimeConfigRepository.localServiceUrl()
-        )
-        // 浏览器通知统一走宿主桥，避免 Android WebView 里再退回不可用的 Notification API。
-        targetWebView.addJavascriptInterface(
-            AndroidSystemNotificationBridge(
-                notificationController = hostIo.systemNotificationController,
-                isHostActive = { !isFinishing && !isDestroyed },
-                runOnUiThread = { action -> runOnUiThread(action) },
-                requestPermission = { hostIo.requestNotificationPermissionIfNeeded() }
-            ),
-            systemNotificationBridgeName
-        )
-        // 只暴露 Tavern 需要的最小宿主能力，给 Android 专属扩展调用设置页、当前页面外开、日志悬浮球和版本信息。
-        targetWebView.addJavascriptInterface(
-            AndroidHostBridge(
-                isHostActive = { !isFinishing && !isDestroyed },
-                runOnUiThread = { action -> runOnUiThread(action) },
-                openSettings = { bootstrapOverlayHost.openBootstrapSettings() },
-                showFloatingLogsBubble = { floatingLogsHost.showBubble() },
-                requestOpenCurrentPageInBrowser = {
-                    webViewHost.openCurrentPageInExternalBrowser()
-                },
-                applyFloatingLogsBubbleEnabled = { enabled -> floatingLogsHost.setBubbleEnabled(enabled) },
-                applyWebViewPullRefreshEnabled = { enabled ->
-                    hostConfigStore.webViewPullRefreshEnabled = enabled
-                    webViewHost.updateRefreshLayoutEnabled()
-                },
-                applySystemBarsBackgroundColor = ::applyWebViewSurfaceSystemBars,
-                applySystemBarsBackgroundColors = ::applyWebViewSurfaceSystemBars,
-                reloadTavern = { webViewHost.reloadTavernWebView(source = "android_host_bridge") },
-                hostVersionInfoJson = ::buildAndroidHostVersionInfoJson,
-                recordWebPerformanceDiagnosticPayload = { payload ->
-                    recordDetailedHostDiagnostic(category = "web_performance", body = payload)
-                }
-            ),
-            androidHostBridgeName
+            }
+        ).create(browserEngine)
+    }
+
+    private fun createBrowserHostBridgeActions(): BrowserHostBridgeActions {
+        return BrowserHostBridgeActions(
+            isHostActive = { !isFinishing && !isDestroyed },
+            runOnUiThread = { action -> runOnUiThread(action) },
+            openSettings = { bootstrapOverlayHost.openBootstrapSettings() },
+            showFloatingLogsBubble = { floatingLogsHost.showBubble() },
+            requestOpenCurrentPageInBrowser = { browserHost.openCurrentPageInExternalBrowser() },
+            applyFloatingLogsBubbleEnabled = { enabled -> floatingLogsHost.setBubbleEnabled(enabled) },
+            applyBrowserPullRefreshEnabled = { enabled ->
+                hostConfigStore.webViewPullRefreshEnabled = enabled
+                browserHost.updateRefreshLayoutEnabled()
+            },
+            applySystemBarsBackgroundColor = ::applyWebViewSurfaceSystemBars,
+            applySystemBarsBackgroundColors = ::applyWebViewSurfaceSystemBars,
+            reloadTavern = { browserHost.reloadTavernWebView(source = "android_host_bridge") },
+            hostVersionInfoJson = ::buildAndroidHostVersionInfoJson,
+            recordWebPerformanceDiagnosticPayload = { payload ->
+                recordWebPerformanceDiagnosticPayload(payload)
+            }
         )
     }
 
@@ -588,7 +620,7 @@ class MainActivity : AppCompatActivity() {
     private fun reapplyCurrentSystemBars() {
         // 从设置页返回主界面时，系统栏显示模式可能已经变化；
         // 这里按“当前宿主实际显示的是启动遮罩还是 WebView 页面”重新应用一次，保证设置立即生效。
-        if (!::webViewHost.isInitialized || !webViewHost.webViewRefreshLayout.isShown) {
+        if (!::browserHost.isInitialized || !browserHost.browserContainer.isShown) {
             applyHostSurfaceSystemBars()
             return
         }
@@ -635,8 +667,13 @@ class MainActivity : AppCompatActivity() {
     private fun buildAndroidHostVersionInfoJson(): String {
         val packageInfo = currentPackageInfo()
         val webViewPackageInfo = runCatching { WebViewCompat.getCurrentWebViewPackage(this) }.getOrNull()
-        val webViewRuntimeCompatibility = if (::webViewHost.isInitialized) {
-            webViewHost.currentRuntimeCompatibility()
+        val browserRuntimeInfo = if (::browserHost.isInitialized) {
+            browserHost.currentBrowserRuntimeInfo()
+        } else {
+            null
+        }
+        val webViewRuntimeCompatibility = if (::browserHost.isInitialized) {
+            (browserHost as? TavernWebViewHost)?.currentRuntimeCompatibility()
         } else {
             null
         }
@@ -662,6 +699,19 @@ class MainActivity : AppCompatActivity() {
             .put("webViewChromiumMajorVersion", webViewRuntimeCompatibility?.chromiumMajorVersion ?: 0)
             .put("webViewRecommendedChromiumMajorVersion", WebViewRuntimeCompatibility.recommendedChromiumMajorVersion())
             .put("webViewOutdated", webViewRuntimeCompatibility?.isOutdated == true)
+            .put("browserEngine", if (::browserHost.isInitialized) browserHost.browserEngine.name else hostConfigStore.browserEngine.name)
+            .put("browserRuntimeName", browserRuntimeInfo?.runtimeName.orEmpty())
+            .put("browserPackageName", browserRuntimeInfo?.packageName.orEmpty())
+            .put("browserVersionName", browserRuntimeInfo?.versionName.orEmpty())
+            .put("browserVersionCode", browserRuntimeInfo?.versionCode.orEmpty())
+            .put("browserCoreName", browserRuntimeInfo?.coreName.orEmpty())
+            .put("browserCoreVersion", browserRuntimeInfo?.coreVersion.orEmpty())
+            .put("browserCoreMajorVersion", browserRuntimeInfo?.coreMajorVersion ?: 0)
+            .put("browserRecommendedCoreMajorVersion", browserRuntimeInfo?.recommendedCoreMajorVersion ?: 0)
+            .put("browserOutdated", browserRuntimeInfo?.outdated == true)
+            .put("browserUserAgent", browserRuntimeInfo?.userAgent.orEmpty())
+            .put("browserZoomPercent", hostConfigStore.browserZoomPercent)
+            .put("browserAppliedZoomPercent", if (::browserHost.isInitialized) browserHost.currentBrowserZoomPercent() else hostConfigStore.browserZoomPercent)
             .put("hostDisplayMode", hostConfigStore.hostDisplayMode.name)
             .put("launchWebViewOnReady", hostConfigStore.launchWebViewOnReady)
             .put("floatingLogBubbleEnabled", hostConfigStore.floatingLogBubbleEnabled)
@@ -669,6 +719,19 @@ class MainActivity : AppCompatActivity() {
             .put("unrestrictedFileImportSelectionEnabled", hostConfigStore.unrestrictedFileImportSelectionEnabled)
             .put("serverReady", processManager.currentSnapshot().isReady)
             .toString()
+    }
+
+    private fun applyBrowserZoomPercentFromFloatingLogs(percent: Int): Boolean {
+        val sanitizedPercent = BrowserZoomOptions.sanitize(percent)
+        hostConfigStore.browserZoomPercent = sanitizedPercent
+        if (!::browserHost.isInitialized || !shouldUseWebViewSurface()) {
+            recordDefaultHostDiagnostic(
+                category = "browser",
+                body = "event=browser_zoom_apply_skipped reason=browser_unavailable percent=$sanitizedPercent"
+            )
+            return false
+        }
+        return browserHost.setBrowserZoomPercent(sanitizedPercent)
     }
 
     private fun currentPackageInfo() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -679,7 +742,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun inspectWebViewRuntimeBeforeBootstrap() {
-        val compatibility = webViewHost.currentRuntimeCompatibility()
+        val compatibility = (browserHost as? TavernWebViewHost)?.currentRuntimeCompatibility()
+        if (compatibility == null) {
+            hostLogRepository.recordHostDiagnostic(
+                category = "browser",
+                body = "event=startup_browser_engine webViewRuntimeCompatibility=skipped ${browserHost.currentBrowserRuntimeInfo().toDiagnosticText()}"
+            )
+            return
+        }
         // 这条日志属于启动前兼容性结论，必须常驻导出日志，避免旧 WebView 导致主题/布局异常时缺少根因证据。
         hostLogRepository.recordHostDiagnostic(
             category = "webview",
@@ -777,6 +847,12 @@ class MainActivity : AppCompatActivity() {
         hostLogRepository.recordHostDiagnostic(category = category, body = body)
     }
 
+    private fun recordWebPerformanceDiagnosticPayload(payload: String) {
+        // 浏览器内核/缩放/能力摘要是一行低频证据，默认写盘便于 release 现场直接判断
+        // GeckoView 与系统 WebView 的 viewport、DPR、IndexedDB/WebGL/WASM 能力差异。
+        recordDefaultHostDiagnostic(category = "web_performance", body = payload)
+    }
+
     // 宿主详细诊断日志只在“调试模式”开启时写盘；
     // 默认模式下保留启动日志、服务日志和崩溃日志，避免常态运行时把 host-diagnostics / js-error 写得过于噪杂。
     private fun recordDetailedHostDiagnostic(category: String, body: String) {
@@ -811,7 +887,7 @@ class MainActivity : AppCompatActivity() {
             dispatchers = appGraph.dispatchers,
             extensionsRepository = appGraph.extensionsRepository(),
             onTavernUiReloadRequired = {
-                webViewHost.reloadTavernUiIfPossible(processManager.currentSnapshot())
+                browserHost.reloadTavernUiIfPossible(processManager.currentSnapshot())
             }
         ).launch()
     }

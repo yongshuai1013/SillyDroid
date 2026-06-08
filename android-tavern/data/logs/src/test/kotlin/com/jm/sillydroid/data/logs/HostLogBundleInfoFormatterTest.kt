@@ -1,6 +1,7 @@
 package com.jm.sillydroid.data.logs
 
 import com.jm.sillydroid.data.settings.HostConfigSnapshot
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.FloatingLogBubblePosition
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import org.junit.Assert.assertTrue
@@ -54,6 +55,8 @@ class HostLogBundleInfoFormatterTest {
         assertTrue(bundleInfo.contains("rootfsManifestIncluded=true"))
         assertTrue(bundleInfo.contains("serverManifestIncluded=true"))
         assertTrue(bundleInfo.contains("hostConfigSnapshotPolicy=explicit-host-preferences-only"))
+        assertTrue(bundleInfo.contains("browserEngine=SYSTEM_WEBVIEW"))
+        assertTrue(bundleInfo.contains("browserZoomPercent=100"))
         assertTrue(bundleInfo.contains("crashLogUploadEnabled=true"))
         assertTrue(bundleInfo.contains("crashLogUploadPromptConsumed=true"))
         assertTrue(bundleInfo.contains("logFileCount=2"))
@@ -152,6 +155,8 @@ class HostLogBundleInfoFormatterTest {
         assertTrue(bundleInfoJson.contains("\"hostConfig\": {"))
         assertTrue(bundleInfoJson.contains("\"snapshotPolicy\": \"explicit-host-preferences-only\""))
         assertTrue(bundleInfoJson.contains("\"servicePort\": 8000"))
+        assertTrue(bundleInfoJson.contains("\"browserEngine\": \"SYSTEM_WEBVIEW\""))
+        assertTrue(bundleInfoJson.contains("\"browserZoomPercent\": 100"))
         assertTrue(bundleInfoJson.contains("\"launchWebViewOnReady\": true"))
         assertTrue(bundleInfoJson.contains("\"backgroundHealthCheckEnabled\": false"))
         assertTrue(bundleInfoJson.contains("\"terminalFontSizePx\": 16"))
@@ -203,6 +208,8 @@ class HostLogBundleInfoFormatterTest {
             snapshotPolicy = "explicit-host-preferences-only",
             servicePort = 8000,
             hostDisplayMode = HostDisplayMode.NORMAL,
+            browserEngine = BrowserEngine.SYSTEM_WEBVIEW,
+            browserZoomPercent = 100,
             launchWebViewOnReady = true,
             backgroundHealthCheckEnabled = false,
             webViewPullRefreshEnabled = true,

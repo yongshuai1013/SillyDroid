@@ -12,6 +12,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import android.graphics.drawable.GradientDrawable
@@ -37,6 +38,7 @@ import com.jm.sillydroid.core.ui.logs.showHostLogExportSelectionDialog
 import com.jm.sillydroid.core.ui.scroll.DraggableScrollThumbController
 import com.jm.sillydroid.core.model.logs.HostLogEntry
 import com.jm.sillydroid.core.model.logs.HostLogSnapshot
+import com.jm.sillydroid.core.model.settings.BrowserZoomOptions
 import com.jm.sillydroid.core.model.settings.FloatingLogRefreshIntervals
 import com.jm.sillydroid.domain.logs.HostLogRepository
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
@@ -66,6 +68,7 @@ class FloatingLogsController(
     private val openSettings: () -> Unit,
     private val openCurrentPageInBrowser: () -> Boolean,
     private val reloadTavernWebView: () -> Boolean,
+    private val applyBrowserZoomPercent: (Int) -> Boolean,
     private val feedbackImageLauncher: ActivityResultLauncher<String>,
     private val feedbackUploadConfig: () -> HostLogBundleUploadRequestConfig,
     private val recordHostDiagnostic: (category: String, body: String) -> Unit
@@ -121,6 +124,7 @@ class FloatingLogsController(
             }
         }
         configureControlButtons()
+        configureBrowserZoomControls()
         scrollThumbController.configure()
         updateControlLabels()
         activity.lifecycle.addObserver(this)
@@ -525,6 +529,51 @@ class FloatingLogsController(
         views.selectButton.isEnabled = availableEntries.isNotEmpty()
         views.intervalButton.text = refreshIntervalLabel(preferences.floatingLogRefreshIntervalMillis)
         views.intervalButton.isEnabled = true
+        updateBrowserZoomLabel(preferences.browserZoomPercent)
+    }
+
+    private fun configureBrowserZoomControls() {
+        views.browserZoomSlider.max = BrowserZoomOptions.sliderProgress(BrowserZoomOptions.MAX_PERCENT)
+        views.browserZoomSlider.progress = BrowserZoomOptions.sliderProgress(preferences.browserZoomPercent)
+        updateBrowserZoomLabel(preferences.browserZoomPercent)
+        views.browserZoomSlider.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    val percent = BrowserZoomOptions.percentFromSliderProgress(progress)
+                    updateBrowserZoomLabel(percent)
+                    if (!fromUser) {
+                        return
+                    }
+                    if (preferences.browserZoomPercent != percent) {
+                        preferences.browserZoomPercent = percent
+                    }
+                    val applied = applyBrowserZoomPercent(percent)
+                    recordHostDiagnostic(
+                        "browser",
+                        "event=floating_logs_browser_zoom_changed percent=$percent applied=$applied"
+                    )
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    val percent = BrowserZoomOptions.percentFromSliderProgress(seekBar.progress)
+                    if (preferences.browserZoomPercent != percent) {
+                        preferences.browserZoomPercent = percent
+                        val applied = applyBrowserZoomPercent(percent)
+                        recordHostDiagnostic(
+                            "browser",
+                            "event=floating_logs_browser_zoom_committed percent=$percent applied=$applied"
+                        )
+                    }
+                    updateBrowserZoomLabel(percent)
+                }
+            }
+        )
+    }
+
+    private fun updateBrowserZoomLabel(percent: Int) {
+        views.browserZoomLabel.text = text.browserZoomLabel(BrowserZoomOptions.sanitize(percent))
     }
 
     private fun showSelectDialog() {
@@ -924,6 +973,8 @@ data class FloatingLogsViews(
     val reloadWebViewButton: MaterialButton,
     val downloadButton: MaterialButton,
     val clearButton: MaterialButton,
+    val browserZoomLabel: TextView,
+    val browserZoomSlider: SeekBar,
     val openSettingsButton: MaterialButton,
     val openBrowserButton: MaterialButton,
     val feedbackButton: MaterialButton,
@@ -947,6 +998,7 @@ data class FloatingLogsText(
     val exportEmpty: () -> String,
     val downloadSuccess: (zipFileName: String, zipPath: String) -> String,
     val downloadFailed: () -> String,
+    val browserZoomLabel: (percent: Int) -> String,
     val clearConfirmTitle: () -> String,
     val clearConfirmMessage: () -> String,
     val clearConfirmPositiveLabel: () -> String,

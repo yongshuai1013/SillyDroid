@@ -2,6 +2,8 @@ package com.jm.sillydroid.data.settings
 
 import android.content.Context
 import com.jm.sillydroid.core.model.bootstrap.defaultBootstrapServicePort
+import com.jm.sillydroid.core.model.settings.BrowserEngine
+import com.jm.sillydroid.core.model.settings.BrowserZoomOptions
 import com.jm.sillydroid.core.model.settings.FloatingLogBubblePosition
 import com.jm.sillydroid.core.model.settings.FloatingLogRefreshIntervals
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
@@ -13,6 +15,8 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         internal const val preferencesName = "bootstrap-host-config"
         private const val servicePortKey = "service-port"
         private const val hostDisplayModeKey = "host-display-mode"
+        private const val browserEngineKey = "browser-engine"
+        private const val browserZoomPercentKey = "browser-zoom-percent"
         private const val launchWebViewOnReadyKey = "launch-webview-on-ready"
         private const val backgroundHealthCheckEnabledKey = "background-health-check-enabled"
         private const val webViewPullRefreshEnabledKey = "webview-pull-refresh-enabled"
@@ -62,6 +66,24 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         set(value) {
             preferences.edit()
                 .putString(hostDisplayModeKey, value.name)
+                .apply()
+        }
+
+    override var browserEngine: BrowserEngine
+        get() = BrowserEngine.fromStorageValue(preferences.getString(browserEngineKey, BrowserEngine.SYSTEM_WEBVIEW.name))
+        set(value) {
+            preferences.edit()
+                .putString(browserEngineKey, value.name)
+                .apply()
+        }
+
+    override var browserZoomPercent: Int
+        get() = BrowserZoomOptions.sanitize(
+            preferences.getInt(browserZoomPercentKey, BrowserZoomOptions.DEFAULT_PERCENT)
+        )
+        set(value) {
+            preferences.edit()
+                .putInt(browserZoomPercentKey, BrowserZoomOptions.sanitize(value))
                 .apply()
         }
 

@@ -78,6 +78,8 @@ class HomeViewModelTest {
         assertFalse(viewModel.isImeVisible)
         assertFalse(viewModel.shouldForceFreshWebViewLoad)
         assertEquals(0, viewModel.browserDataClearMask)
+        assertEquals("", viewModel.backgroundOnlyExternalBrowserAttemptKey)
+        assertFalse(viewModel.consumeWebViewRendererCrashBrowserEngineHint())
     }
 
     @Test
@@ -109,6 +111,16 @@ class HomeViewModelTest {
         assertTrue(viewModel.isOpeningBootstrapSettings)
         assertTrue(viewModel.isPullGestureRefreshing)
         assertTrue(viewModel.isImeVisible)
+    }
+
+    @Test
+    fun `webview renderer crash browser engine hint is consumed once`() = runTest {
+        val viewModel = HomeViewModel(fakeController)
+
+        viewModel.requestWebViewRendererCrashBrowserEngineHint()
+
+        assertTrue(viewModel.consumeWebViewRendererCrashBrowserEngineHint())
+        assertFalse(viewModel.consumeWebViewRendererCrashBrowserEngineHint())
     }
 
     @Test

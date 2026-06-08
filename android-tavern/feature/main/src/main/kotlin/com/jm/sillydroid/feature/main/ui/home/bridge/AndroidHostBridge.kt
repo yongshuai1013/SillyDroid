@@ -1,4 +1,4 @@
-package com.jm.sillydroid.feature.main.ui.home.webview
+package com.jm.sillydroid.feature.main.ui.home.bridge
 
 import android.webkit.JavascriptInterface
 

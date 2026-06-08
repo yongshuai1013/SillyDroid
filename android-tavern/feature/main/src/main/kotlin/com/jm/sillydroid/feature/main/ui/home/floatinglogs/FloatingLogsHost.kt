@@ -2,6 +2,7 @@ package com.jm.sillydroid.feature.main.ui.home.floatinglogs
 
 import android.view.View
 import android.widget.ImageButton
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
 import androidx.appcompat.app.AppCompatActivity
@@ -32,6 +33,7 @@ class FloatingLogsHost(
     private val openSettings: () -> Unit,
     private val openCurrentPageInBrowser: () -> Boolean,
     private val reloadTavernWebView: () -> Boolean,
+    private val applyBrowserZoomPercent: (Int) -> Boolean,
     private val feedbackImageLauncher: ActivityResultLauncher<String>,
     private val feedbackUploadConfig: () -> HostLogBundleUploadRequestConfig,
     private val recordHostDiagnostic: (category: String, body: String) -> Unit
@@ -49,6 +51,8 @@ class FloatingLogsHost(
     private val reloadWebViewButton: MaterialButton = activity.findViewById(R.id.floatingLogsReloadWebViewButton)
     private val downloadButton: MaterialButton = activity.findViewById(R.id.floatingLogsDownloadButton)
     private val clearButton: MaterialButton = activity.findViewById(R.id.floatingLogsClearButton)
+    private val browserZoomLabel: TextView = activity.findViewById(R.id.floatingLogsBrowserZoomLabel)
+    private val browserZoomSlider: SeekBar = activity.findViewById(R.id.floatingLogsBrowserZoomSlider)
     private val openSettingsButton: MaterialButton = activity.findViewById(R.id.floatingLogsOpenSettingsButton)
     private val openBrowserButton: MaterialButton = activity.findViewById(R.id.floatingLogsOpenBrowserButton)
     private val feedbackButton: MaterialButton = activity.findViewById(R.id.floatingLogsFeedbackButton)
@@ -92,6 +96,8 @@ class FloatingLogsHost(
                 reloadWebViewButton = reloadWebViewButton,
                 downloadButton = downloadButton,
                 clearButton = clearButton,
+                browserZoomLabel = browserZoomLabel,
+                browserZoomSlider = browserZoomSlider,
                 openSettingsButton = openSettingsButton,
                 openBrowserButton = openBrowserButton,
                 feedbackButton = feedbackButton,
@@ -114,6 +120,7 @@ class FloatingLogsHost(
                 exportEmpty = { activity.getString(R.string.bootstrap_settings_logs_export_empty) },
                 downloadSuccess = { zipFileName, zipPath -> activity.getString(R.string.floating_logs_download_success, zipFileName, zipPath) },
                 downloadFailed = { activity.getString(R.string.floating_logs_download_failed) },
+                browserZoomLabel = { percent -> activity.getString(R.string.floating_logs_browser_zoom_label, percent) },
                 clearConfirmTitle = { activity.getString(R.string.bootstrap_settings_logs_clear_confirm_title) },
                 clearConfirmMessage = { activity.getString(R.string.bootstrap_settings_logs_clear_confirm_message) },
                 clearConfirmPositiveLabel = { activity.getString(R.string.bootstrap_settings_logs_clear) },
@@ -139,6 +146,7 @@ class FloatingLogsHost(
             openSettings = openSettings,
             openCurrentPageInBrowser = openCurrentPageInBrowser,
             reloadTavernWebView = reloadTavernWebView,
+            applyBrowserZoomPercent = applyBrowserZoomPercent,
             feedbackImageLauncher = feedbackImageLauncher,
             feedbackUploadConfig = feedbackUploadConfig,
             recordHostDiagnostic = recordHostDiagnostic

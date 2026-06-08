@@ -55,6 +55,7 @@ class BootstrapSettingsScreenController(
     private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val backgroundHealthCheckSwitch: MaterialSwitch,
     private val pullRefreshSwitch: MaterialSwitch,
+    private val browserEngineRow: View,
     private val hostDisplayModeRow: View,
     private val unrestrictedFileImportSelectionSwitch: MaterialSwitch,
     private val restoreDefaultsButton: ImageButton,
@@ -103,6 +104,7 @@ class BootstrapSettingsScreenController(
         backgroundOnlyModeSwitch.isEnabled = !busy
         backgroundHealthCheckSwitch.isEnabled = !busy
         pullRefreshSwitch.isEnabled = !busy
+        browserEngineRow.isEnabled = !busy
         hostDisplayModeRow.isEnabled = !busy
         unrestrictedFileImportSelectionSwitch.isEnabled = !busy
         restoreDefaultsButton.isEnabled = !busy

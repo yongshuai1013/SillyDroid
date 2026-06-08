@@ -18,6 +18,8 @@ dependencyResolutionManagement {
         maven(url = "https://dl-ssl.google.com/android/maven2")
         // 设置页终端复用官方 Termux terminal-view/terminal-emulator 组件，避免宿主自己重写 ANSI/PTY 渲染栈。
         maven(url = "https://jitpack.io")
+        // GeckoView 发布在 Mozilla Maven；实验浏览器引擎必须解析这里的 AAR，不能从 mavenCentral 假设可用。
+        maven(url = "https://maven.mozilla.org/maven2")
         google()
         mavenCentral()
     }

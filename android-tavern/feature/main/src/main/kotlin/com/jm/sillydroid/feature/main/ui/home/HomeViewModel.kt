@@ -44,6 +44,8 @@ class HomeViewModel(
     var isOpeningBootstrapSettings: Boolean = false
     var isPullGestureRefreshing: Boolean = false
     var isImeVisible: Boolean = false
+    var backgroundOnlyExternalBrowserAttemptKey: String = ""
+    private var pendingWebViewRendererCrashBrowserEngineHint: Boolean = false
 
     init {
         viewModelScope.launch {
@@ -56,6 +58,18 @@ class HomeViewModel(
     fun resetForBootstrapRestart() {
         loadedUrl = ""
         pendingLocalRetryAttempts = 0
+    }
+
+    fun requestWebViewRendererCrashBrowserEngineHint() {
+        pendingWebViewRendererCrashBrowserEngineHint = true
+    }
+
+    fun consumeWebViewRendererCrashBrowserEngineHint(): Boolean {
+        if (!pendingWebViewRendererCrashBrowserEngineHint) {
+            return false
+        }
+        pendingWebViewRendererCrashBrowserEngineHint = false
+        return true
     }
 
     class Factory(

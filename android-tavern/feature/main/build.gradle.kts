@@ -32,6 +32,7 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.2")
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("com.google.android.material:material:1.12.0")
+    implementation("org.mozilla.geckoview:geckoview:151.0.20260601110758")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     testImplementation("junit:junit:4.13.2")

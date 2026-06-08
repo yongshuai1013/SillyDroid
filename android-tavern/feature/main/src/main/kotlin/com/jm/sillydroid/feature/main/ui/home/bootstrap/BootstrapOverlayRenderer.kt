@@ -2,7 +2,6 @@ package com.jm.sillydroid.feature.main.ui.home.bootstrap
 
 import android.os.Build
 import android.view.View
-import android.webkit.WebView
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.ProgressBar
@@ -16,8 +15,9 @@ class BootstrapOverlayRenderer(
     private val views: BootstrapOverlayViews,
     private val text: BootstrapOverlayText,
     private val syncSettingsEntryState: (BootstrapSessionSnapshot) -> Unit,
-    private val showWebView: (String) -> Unit,
+    private val showBrowser: (String) -> Unit,
     private val shouldLaunchWebViewOnReady: () -> Boolean,
+    private val openExternalBrowserForBackgroundOnly: (BootstrapSessionSnapshot) -> Unit,
     private val updateWebViewRefreshLayoutEnabled: () -> Unit,
     private val setPullGestureRefreshing: (Boolean) -> Unit,
     private val onReadyMonitoring: () -> Unit
@@ -39,19 +39,30 @@ class BootstrapOverlayRenderer(
         renderProgress(snapshot)
 
         if (snapshot.lifecycle == BootstrapLifecycle.READY_MONITORING && shouldShowWebView) {
-            showWebView(snapshot.localUrl)
+            showBrowser(snapshot.localUrl)
             onReadyMonitoring()
+        } else if (snapshot.lifecycle == BootstrapLifecycle.READY_MONITORING &&
+            snapshot.derivedUiFlags.showWebView &&
+            !shouldLaunchWebViewOnReady()
+        ) {
+            openExternalBrowserForBackgroundOnly(snapshot)
+            onReadyMonitoring()
+            renderHiddenBrowser()
         } else if (shouldShowWebView) {
-            views.webViewRefreshLayout.isVisible = true
-            views.webView().isVisible = true
+            views.browserContainer.isVisible = true
+            views.browserSurface().isVisible = true
             updateWebViewRefreshLayoutEnabled()
         } else {
-            views.overlay.isVisible = true
-            views.webViewRefreshLayout.isVisible = false
-            views.webViewRefreshLayout.isEnabled = false
-            setPullGestureRefreshing(false)
-            views.webView().isVisible = false
+            renderHiddenBrowser()
         }
+    }
+
+    private fun renderHiddenBrowser() {
+        views.overlay.isVisible = true
+        views.browserContainer.isVisible = false
+        views.browserContainer.isEnabled = false
+        setPullGestureRefreshing(false)
+        views.browserSurface().isVisible = false
     }
 
     private fun renderStatusText(snapshot: BootstrapSessionSnapshot) {
@@ -154,9 +165,9 @@ class BootstrapOverlayRenderer(
 }
 
 /**
- * `webView` 用 provider 形式暴露：renderer crash 后 [com.jm.sillydroid.feature.main.ui.home.webview.TavernWebViewHost]
- * 会替换底层 WebView 实例，这里每次访问都取最新引用，避免操作已 destroy 的旧 WebView。
- * `webViewRefreshLayout`、`overlay` 等容器视图在布局里不会被替换，仍用直接引用。
+ * `browserSurface` 用 provider 形式暴露：系统 WebView renderer crash 后会替换底层 WebView 实例，
+ * GeckoView 切换分支也会暴露另一种 View，这里每次访问都取最新引用，避免操作已 destroy 的旧浏览器视图。
+ * `browserContainer`、`overlay` 等容器视图在布局里不会被替换，仍用直接引用。
  */
 data class BootstrapOverlayViews(
     val overlay: View,
@@ -165,8 +176,8 @@ data class BootstrapOverlayViews(
     val settingsButton: ImageButton,
     val progress: ProgressBar,
     val progressLabel: TextView,
-    val webViewRefreshLayout: View,
-    val webView: () -> WebView
+    val browserContainer: View,
+    val browserSurface: () -> View
 )
 
 data class BootstrapOverlayText(

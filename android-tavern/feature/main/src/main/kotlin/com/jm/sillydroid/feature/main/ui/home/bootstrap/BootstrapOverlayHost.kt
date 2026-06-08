@@ -22,7 +22,7 @@ import com.jm.sillydroid.domain.bootstrap.BootstrapController
 import com.jm.sillydroid.feature.main.R
 import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
 import com.jm.sillydroid.feature.main.ui.home.floatinglogs.FloatingLogsHost
-import com.jm.sillydroid.feature.main.ui.home.webview.TavernWebViewHost
+import com.jm.sillydroid.feature.main.ui.home.webview.TavernBrowserHost
 import com.jm.sillydroid.ui.update.AppUpdateCoordinator
 import kotlinx.coroutines.launch
 
@@ -44,9 +44,10 @@ class BootstrapOverlayHost(
     private val homeViewModel: HomeViewModel,
     private val processManager: BootstrapController,
     private val appGraph: SillyDroidAppGraph,
-    private val webViewHost: TavernWebViewHost,
+    private val browserHost: TavernBrowserHost,
     private val floatingLogsHost: FloatingLogsHost,
     private val onMaybePromptDefaultExtensionsAfterBootstrapReady: () -> Unit,
+    private val recreateMainActivityForBrowserEngineChange: () -> Unit = {},
 ) {
     private val overlay: View = activity.findViewById(R.id.bootstrapOverlay)
     private val status: TextView = activity.findViewById(R.id.bootstrapStatus)
@@ -70,8 +71,8 @@ class BootstrapOverlayHost(
                 settingsButton = settingsButton,
                 progress = progress,
                 progressLabel = progressLabel,
-                webViewRefreshLayout = webViewHost.webViewRefreshLayout,
-                webView = { webViewHost.webView }
+                browserContainer = browserHost.browserContainer,
+                browserSurface = { browserHost.browserSurface }
             ),
             text = BootstrapOverlayText(
                 pausedMessage = { activity.getString(R.string.bootstrap_paused_message) },
@@ -84,9 +85,10 @@ class BootstrapOverlayHost(
                 tavernLogTail = { line -> activity.getString(R.string.bootstrap_startup_tavern_log_tail, line) }
             ),
             syncSettingsEntryState = ::syncBootstrapSettingsEntryState,
-            showWebView = { url -> webViewHost.showWebView(url) },
+            showBrowser = { url -> browserHost.showBrowser(url) },
             shouldLaunchWebViewOnReady = { appGraph.hostConfigStore.launchWebViewOnReady },
-            updateWebViewRefreshLayoutEnabled = { webViewHost.updateRefreshLayoutEnabled() },
+            openExternalBrowserForBackgroundOnly = ::openExternalBrowserForBackgroundOnly,
+            updateWebViewRefreshLayoutEnabled = { browserHost.updateRefreshLayoutEnabled() },
             setPullGestureRefreshing = { refreshing -> homeViewModel.isPullGestureRefreshing = refreshing },
             onReadyMonitoring = onMaybePromptDefaultExtensionsAfterBootstrapReady
         )
@@ -98,6 +100,13 @@ class BootstrapOverlayHost(
         homeViewModel.isOpeningBootstrapSettings = false
         val shouldForceFreshWebViewLoad = result.resultCode == Activity.RESULT_OK &&
             shouldForceFreshWebViewLoadFromSettingsResult(result.data)
+        val shouldRecreateMainActivity = result.resultCode == Activity.RESULT_OK &&
+            shouldRecreateMainActivityFromSettingsResult(result.data)
+        if (shouldRecreateMainActivity) {
+            // 浏览器引擎切换会替换整个 browser host；这里不重启 Tavern 服务，只重建主 Activity 重新装配宿主。
+            recreateMainActivityForBrowserEngineChange()
+            return@registerForActivityResult
+        }
         val browserDataClearMask = browserDataClearMaskFromSettingsResult(result.data)
         if (result.resultCode == Activity.RESULT_OK && shouldStartBootstrapFromSettingsResult(result.data)) {
             if (shouldForceFreshWebViewLoad) {
@@ -109,7 +118,7 @@ class BootstrapOverlayHost(
             }
             homeViewModel.resetForBootstrapRestart()
             overlay.isVisible = true
-            webViewHost.hideForBootstrapRestart()
+            browserHost.hideForBootstrapRestart()
             startBootstrap(true)
             return@registerForActivityResult
         }
@@ -122,7 +131,7 @@ class BootstrapOverlayHost(
         }
         render(currentSnapshot)
         if (result.resultCode == Activity.RESULT_OK && shouldReloadTavernUiFromSettingsResult(result.data)) {
-            webViewHost.reloadTavernUiIfPossible(currentSnapshot)
+            browserHost.reloadTavernUiIfPossible(currentSnapshot)
         }
     }
 
@@ -167,7 +176,7 @@ class BootstrapOverlayHost(
                 processManager.events.collect { event ->
                     when (event) {
                         is BootstrapEvent.AutoRestartScheduled,
-                        is BootstrapEvent.SettingsPauseRequested -> webViewHost.resetRefreshOnBootstrapEvent()
+                        is BootstrapEvent.SettingsPauseRequested -> browserHost.resetRefreshOnBootstrapEvent()
                         else -> Unit
                     }
                 }
@@ -177,6 +186,20 @@ class BootstrapOverlayHost(
 
     fun startBootstrap(forceRestart: Boolean) {
         processManager.start(forceRestart)
+    }
+
+    private fun openExternalBrowserForBackgroundOnly(snapshot: BootstrapSessionSnapshot) {
+        val attemptKey = "${snapshot.appSessionId}:${snapshot.attemptId}:${snapshot.localUrl}"
+        if (homeViewModel.backgroundOnlyExternalBrowserAttemptKey == attemptKey) {
+            return
+        }
+        homeViewModel.backgroundOnlyExternalBrowserAttemptKey = attemptKey
+        // 纯后台模式不创建内部浏览器页面；服务 ready 后必须直接打开本轮快照里的本地入口。
+        val opened = browserHost.openUrlInExternalBrowser(snapshot.localUrl)
+        appGraph.hostLogRepository.recordHostDiagnostic(
+            category = "browser",
+            body = "event=background_only_external_browser_open result=$opened attemptKey=$attemptKey"
+        )
     }
 
     fun canOpenBootstrapSettings(snapshot: BootstrapSessionSnapshot): Boolean {
@@ -226,6 +249,10 @@ class BootstrapOverlayHost(
 
     private fun shouldForceFreshWebViewLoadFromSettingsResult(data: Intent?): Boolean {
         return data?.getBooleanExtra(SettingsNavigationContract.resultShouldForceFreshWebViewLoadKey, false) == true
+    }
+
+    private fun shouldRecreateMainActivityFromSettingsResult(data: Intent?): Boolean {
+        return data?.getBooleanExtra(SettingsNavigationContract.resultShouldRecreateMainActivityKey, false) == true
     }
 
     private fun browserDataClearMaskFromSettingsResult(data: Intent?): Int {

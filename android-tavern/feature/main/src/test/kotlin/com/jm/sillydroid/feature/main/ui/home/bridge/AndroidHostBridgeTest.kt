@@ -1,4 +1,4 @@
-package com.jm.sillydroid.feature.main.ui.home.webview
+package com.jm.sillydroid.feature.main.ui.home.bridge
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

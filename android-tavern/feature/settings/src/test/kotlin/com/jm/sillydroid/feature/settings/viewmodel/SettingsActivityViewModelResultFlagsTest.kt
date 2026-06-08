@@ -1,5 +1,6 @@
 package com.jm.sillydroid.feature.settings.viewmodel
 
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.BrowserDataClearTarget
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
@@ -50,9 +51,23 @@ class SettingsActivityViewModelResultFlagsTest {
         assertTrue(viewModel.uiState.value.backgroundHealthCheckEnabled)
     }
 
+    @Test
+    fun `changing browser engine marks main activity recreate result`() {
+        val repository = FakeHostPreferencesRepository()
+        val viewModel = SettingsActivityViewModel(repository)
+
+        viewModel.setBrowserEngine(BrowserEngine.GECKOVIEW)
+
+        assertEquals(BrowserEngine.GECKOVIEW, repository.browserEngine)
+        assertEquals(BrowserEngine.GECKOVIEW, viewModel.uiState.value.browserEngine)
+        assertTrue(viewModel.uiState.value.shouldRecreateMainActivity)
+    }
+
     private class FakeHostPreferencesRepository : HostPreferencesRepository {
         override var servicePort: Int = 8000
         override var hostDisplayMode: HostDisplayMode = HostDisplayMode.NORMAL
+        override var browserEngine: BrowserEngine = BrowserEngine.SYSTEM_WEBVIEW
+        override var browserZoomPercent: Int = 100
         override var launchWebViewOnReady: Boolean = true
         override var backgroundHealthCheckEnabled: Boolean = false
         override var webViewPullRefreshEnabled: Boolean = true

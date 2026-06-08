@@ -1,6 +1,7 @@
 package com.jm.sillydroid.data.settings
 
 import android.content.Context
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.FloatingLogBubblePosition
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
@@ -11,6 +12,8 @@ data class HostConfigSnapshot(
     val snapshotPolicy: String,
     val servicePort: Int,
     val hostDisplayMode: HostDisplayMode,
+    val browserEngine: BrowserEngine,
+    val browserZoomPercent: Int,
     val launchWebViewOnReady: Boolean,
     val backgroundHealthCheckEnabled: Boolean,
     val webViewPullRefreshEnabled: Boolean,
@@ -44,6 +47,8 @@ object HostConfigSnapshotExporter {
             snapshotPolicy = explicitSnapshotPolicy,
             servicePort = hostPreferences.servicePort,
             hostDisplayMode = hostPreferences.hostDisplayMode,
+            browserEngine = hostPreferences.browserEngine,
+            browserZoomPercent = hostPreferences.browserZoomPercent,
             launchWebViewOnReady = hostPreferences.launchWebViewOnReady,
             backgroundHealthCheckEnabled = hostPreferences.backgroundHealthCheckEnabled,
             webViewPullRefreshEnabled = hostPreferences.webViewPullRefreshEnabled,

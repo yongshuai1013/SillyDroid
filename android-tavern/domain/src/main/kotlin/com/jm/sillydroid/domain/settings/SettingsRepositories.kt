@@ -1,6 +1,7 @@
 package com.jm.sillydroid.domain.settings
 
 import android.net.Uri
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.FloatingLogBubblePosition
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.core.model.settings.LoadedTavernConfig
@@ -30,6 +31,8 @@ interface SettingsConfigRepository {
 interface HostPreferencesRepository {
     var servicePort: Int
     var hostDisplayMode: HostDisplayMode
+    var browserEngine: BrowserEngine
+    var browserZoomPercent: Int
     var launchWebViewOnReady: Boolean
     var backgroundHealthCheckEnabled: Boolean
     var webViewPullRefreshEnabled: Boolean

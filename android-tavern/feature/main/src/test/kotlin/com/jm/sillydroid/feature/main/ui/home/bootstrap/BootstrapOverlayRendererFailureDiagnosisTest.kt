@@ -27,8 +27,8 @@ class BootstrapOverlayRendererFailureDiagnosisTest {
                 settingsButton = mock(),
                 progress = mock(),
                 progressLabel = mock(),
-                webViewRefreshLayout = mock(),
-                webView = { mock() }
+                browserContainer = mock(),
+                browserSurface = { mock() }
             ),
             text = BootstrapOverlayText(
                 pausedMessage = { "paused-message" },
@@ -41,8 +41,9 @@ class BootstrapOverlayRendererFailureDiagnosisTest {
                 tavernLogTail = { "tail $it" }
             ),
             syncSettingsEntryState = {},
-            showWebView = {},
+            showBrowser = {},
             shouldLaunchWebViewOnReady = { true },
+            openExternalBrowserForBackgroundOnly = {},
             updateWebViewRefreshLayoutEnabled = {},
             setPullGestureRefreshing = {},
             onReadyMonitoring = {}

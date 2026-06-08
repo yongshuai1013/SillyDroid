@@ -27,6 +27,12 @@
     <string name="download_failed">“%1$s”下载失败：%2$s</string>
     <string name="download_failed_unknown">系统未返回失败详情。</string>
     <string name="download_failed_empty_payload">导出内容为空。</string>
+    <string name="file_chooser_open_failed">无法打开系统文件选择器，请检查系统文件管理器是否可用。</string>
+    <string name="webview_renderer_crash_browser_engine_hint_title">浏览器内核崩溃</string>
+    <string name="webview_renderer_crash_browser_engine_hint_message">系统 WebView 刚刚发生 renderer 崩溃，页面已自动重新加载。如果这个问题反复出现，可以在设置中把浏览器引擎切换为内置 Gecko 内核。</string>
+    <string name="webview_renderer_crash_browser_engine_hint_open_settings">打开设置</string>
+    <string name="webview_renderer_crash_browser_engine_hint_later">稍后</string>
+    <string name="geckoview_choice_prompt_title">请选择</string>
     <string name="floating_logs_bubble_description">打开或收起宿主快捷面板</string>
     <string name="floating_logs_panel_title">实时日志</string>
     <string name="floating_logs_panel_close">关闭实时日志悬浮窗</string>
@@ -52,6 +58,8 @@
     <string name="floating_logs_download_button">导出日志</string>
     <string name="floating_logs_download_success">已导出日志 ZIP“%1$s”。\n路径：%2$s</string>
     <string name="floating_logs_download_failed">导出日志失败。</string>
+    <string name="floating_logs_browser_zoom_label_default">浏览器缩放 100%</string>
+    <string name="floating_logs_browser_zoom_label">浏览器缩放 %1$d%%</string>
     <string name="bootstrap_settings_host_floating_logs_refresh_interval_realtime">实时</string>
     <string name="bootstrap_settings_host_floating_logs_refresh_interval_one_second">1 秒</string>
     <string name="bootstrap_settings_host_floating_logs_refresh_interval_three_seconds">3 秒</string>

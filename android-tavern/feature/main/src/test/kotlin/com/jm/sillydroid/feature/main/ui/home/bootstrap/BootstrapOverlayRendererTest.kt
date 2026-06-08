@@ -27,6 +27,7 @@ class BootstrapOverlayRendererTest {
         refreshLayout: View = mock(),
         onShowWebView: (String) -> Unit = {},
         shouldLaunchWebViewOnReady: () -> Boolean = { true },
+        openExternalBrowserForBackgroundOnly: (BootstrapSessionSnapshot) -> Unit = {},
         onReadyMonitoring: () -> Unit = {},
         updateRefreshLayoutEnabled: () -> Unit = {}
     ): BootstrapOverlayRenderer {
@@ -37,8 +38,8 @@ class BootstrapOverlayRendererTest {
             settingsButton = mock<ImageButton>(),
             progress = mock<ProgressBar>(),
             progressLabel = mock<TextView>(),
-            webViewRefreshLayout = refreshLayout,
-            webView = webViewRef
+            browserContainer = refreshLayout,
+            browserSurface = webViewRef
         )
         val text = BootstrapOverlayText(
             pausedMessage = { "paused" },
@@ -54,8 +55,9 @@ class BootstrapOverlayRendererTest {
             views = views,
             text = text,
             syncSettingsEntryState = { /* no-op */ },
-            showWebView = onShowWebView,
+            showBrowser = onShowWebView,
             shouldLaunchWebViewOnReady = shouldLaunchWebViewOnReady,
+            openExternalBrowserForBackgroundOnly = openExternalBrowserForBackgroundOnly,
             updateWebViewRefreshLayoutEnabled = updateRefreshLayoutEnabled,
             setPullGestureRefreshing = { /* no-op */ },
             onReadyMonitoring = onReadyMonitoring
@@ -130,13 +132,15 @@ class BootstrapOverlayRendererTest {
         val overlay = mock<View>()
         val refreshLayout = mock<View>()
         var shownUrl: String? = null
+        var externalBrowserSnapshot: BootstrapSessionSnapshot? = null
 
         val renderer = newRenderer(
             webViewRef = { webView },
             overlay = overlay,
             refreshLayout = refreshLayout,
             onShowWebView = { url -> shownUrl = url },
-            shouldLaunchWebViewOnReady = { false }
+            shouldLaunchWebViewOnReady = { false },
+            openExternalBrowserForBackgroundOnly = { snapshot -> externalBrowserSnapshot = snapshot }
         )
 
         renderer.render(
@@ -148,6 +152,7 @@ class BootstrapOverlayRendererTest {
         )
 
         org.junit.Assert.assertNull(shownUrl)
+        org.junit.Assert.assertEquals("http://127.0.0.1:8000/", externalBrowserSnapshot?.localUrl)
         verify(overlay).visibility = View.VISIBLE
         verify(refreshLayout).visibility = View.GONE
         verify(webView).visibility = View.GONE

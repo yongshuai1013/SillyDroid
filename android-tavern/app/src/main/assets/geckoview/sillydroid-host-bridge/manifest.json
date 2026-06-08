@@ -1,0 +1,35 @@
+{
+  "manifest_version": 2,
+  "name": "SillyDroid GeckoView Host Bridge",
+  "version": "1.0.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sillydroid-geckoview-bridge@jlmaster.online"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "tabs",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "sillydroid-host-background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "sillydroid-host-bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

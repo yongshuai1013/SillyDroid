@@ -6,21 +6,42 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.URLUtil
 import android.util.Base64
+import android.util.Base64InputStream
 import android.webkit.WebView
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.jm.sillydroid.feature.main.components.download.resolveDownloadFileName
 import com.jm.sillydroid.feature.main.model.download.BlobDownloadSavedFile
+import com.jm.sillydroid.feature.main.model.download.BlobDownloadChunkRequest
+import com.jm.sillydroid.feature.main.model.download.BlobDownloadChunkedCompleteRequest
+import com.jm.sillydroid.feature.main.model.download.BlobDownloadChunkedStartRequest
 import com.jm.sillydroid.feature.main.model.download.BlobDownloadRequest
 import com.jm.sillydroid.feature.main.model.download.BrowserDownloadRequest
 import com.jm.sillydroid.feature.main.model.download.DownloadFailureReport
+import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
 import org.json.JSONObject
 
 class BlobDownloadController(
-    private val contentResolver: ContentResolver
+    private val contentResolver: ContentResolver,
+    private val chunkTempDirectory: File
 ) {
+    private data class ChunkedDownloadSession(
+        val downloadId: String,
+        val fileName: String,
+        val mimeType: String,
+        val totalBase64Length: Long,
+        val chunkCount: Int,
+        val tempFile: File,
+        var receivedChunkCount: Int = 0,
+        var receivedBase64Length: Long = 0L
+    )
+
     private var documentStartScriptHandler: ScriptHandler? = null
+    private val chunkedDownloadSessions = LinkedHashMap<String, ChunkedDownloadSession>()
 
     fun installBridgeScript(webView: WebView, bridgeName: String, allowedOrigin: String) {
         installDocumentStartScript(webView, bridgeName, allowedOrigin)
@@ -32,6 +53,7 @@ class BlobDownloadController(
     fun close() {
         documentStartScriptHandler?.remove()
         documentStartScriptHandler = null
+        cancelAllChunkedDownloads()
     }
 
     private fun installDocumentStartScript(
@@ -333,6 +355,64 @@ class BlobDownloadController(
         return BlobDownloadRequest(fileName = fileName, mimeType = mimeType, base64Data = base64Data)
     }
 
+    fun parseChunkedStartRequest(payload: String?): BlobDownloadChunkedStartRequest? {
+        if (payload.isNullOrBlank()) {
+            return null
+        }
+
+        val json = JSONObject(payload)
+        val downloadId = json.optString("downloadId").trim()
+        val fileName = resolveFileName(json.optString("fileName"))
+        val mimeType = json.optString("mimeType").trim().ifBlank { "application/octet-stream" }
+        val totalBase64Length = json.optLong("totalBase64Length", 0L)
+        val chunkCount = json.optInt("chunkCount", 0)
+        if (downloadId.isBlank() || totalBase64Length < 0L || chunkCount < 0) {
+            return null
+        }
+
+        return BlobDownloadChunkedStartRequest(
+            downloadId = downloadId,
+            fileName = fileName,
+            mimeType = mimeType,
+            totalBase64Length = totalBase64Length,
+            chunkCount = chunkCount
+        )
+    }
+
+    fun parseChunkRequest(payload: String?): BlobDownloadChunkRequest? {
+        if (payload.isNullOrBlank()) {
+            return null
+        }
+
+        val json = JSONObject(payload)
+        val downloadId = json.optString("downloadId").trim()
+        val index = json.optInt("index", -1)
+        val base64Data = json.optString("base64").trim()
+        if (downloadId.isBlank() || index < 0 || base64Data.isBlank()) {
+            return null
+        }
+
+        return BlobDownloadChunkRequest(downloadId = downloadId, index = index, base64Data = base64Data)
+    }
+
+    fun parseChunkedCompleteRequest(payload: String?): BlobDownloadChunkedCompleteRequest? {
+        if (payload.isNullOrBlank()) {
+            return null
+        }
+
+        val json = JSONObject(payload)
+        val downloadId = json.optString("downloadId").trim()
+        if (downloadId.isBlank()) {
+            return null
+        }
+
+        return BlobDownloadChunkedCompleteRequest(
+            downloadId = downloadId,
+            fileName = resolveFileName(json.optString("fileName")),
+            message = json.optString("message").trim()
+        )
+    }
+
     fun parseFailureReport(payload: String?, unknownMessage: String): DownloadFailureReport {
         if (payload.isNullOrBlank()) {
             return DownloadFailureReport(
@@ -349,9 +429,127 @@ class BlobDownloadController(
     }
 
     suspend fun persist(request: BlobDownloadRequest): BlobDownloadSavedFile {
+        return persistBytes(
+            fileName = request.fileName,
+            mimeType = request.mimeType,
+            writeBytes = { output ->
+                output.write(Base64.decode(request.base64Data, Base64.DEFAULT))
+            }
+        )
+    }
+
+    @Synchronized
+    fun beginChunkedDownload(request: BlobDownloadChunkedStartRequest) {
+        val existingSession = chunkedDownloadSessions.remove(request.downloadId)
+        existingSession?.tempFile?.delete()
+        chunkTempDirectory.mkdirs()
+        val safeDownloadId = request.downloadId
+            .filter { char -> char.isLetterOrDigit() || char == '-' || char == '_' }
+            .take(24)
+            .ifBlank { "download" }
+        val tempFile = File.createTempFile("blob-$safeDownloadId-", ".base64", chunkTempDirectory)
+        chunkedDownloadSessions[request.downloadId] = ChunkedDownloadSession(
+            downloadId = request.downloadId,
+            fileName = request.fileName,
+            mimeType = request.mimeType,
+            totalBase64Length = request.totalBase64Length,
+            chunkCount = request.chunkCount,
+            tempFile = tempFile
+        )
+    }
+
+    @Synchronized
+    fun appendChunkedDownload(request: BlobDownloadChunkRequest) {
+        val session = chunkedDownloadSessions[request.downloadId]
+            ?: throw IllegalStateException("chunked download session not found")
+        if (request.index != session.receivedChunkCount) {
+            throw IllegalStateException("chunked download out of order")
+        }
+        if (request.index >= session.chunkCount) {
+            throw IllegalStateException("chunked download index overflow")
+        }
+
+        session.tempFile.appendBytes(request.base64Data.toByteArray(StandardCharsets.US_ASCII))
+        session.receivedChunkCount += 1
+        session.receivedBase64Length += request.base64Data.length.toLong()
+        if (session.receivedBase64Length > session.totalBase64Length) {
+            throw IllegalStateException("chunked download exceeded expected length")
+        }
+    }
+
+    @Synchronized
+    fun cancelChunkedDownload(downloadId: String) {
+        val session = chunkedDownloadSessions.remove(downloadId)
+        session?.tempFile?.delete()
+    }
+
+    @Synchronized
+    private fun takeCompletedChunkedDownload(downloadId: String): ChunkedDownloadSession {
+        val session = chunkedDownloadSessions.remove(downloadId)
+            ?: throw IllegalStateException("chunked download session not found")
+        if (session.receivedChunkCount != session.chunkCount) {
+            session.tempFile.delete()
+            throw IllegalStateException("chunked download incomplete")
+        }
+        if (session.receivedBase64Length != session.totalBase64Length) {
+            session.tempFile.delete()
+            throw IllegalStateException("chunked download length mismatch")
+        }
+        return session
+    }
+
+    suspend fun persistChunked(downloadId: String): BlobDownloadSavedFile {
+        val session = takeCompletedChunkedDownload(downloadId)
+        return try {
+            persistBytes(
+                fileName = session.fileName,
+                mimeType = session.mimeType,
+                writeBytes = { output ->
+                    FileInputStream(session.tempFile).use { rawInput ->
+                        Base64InputStream(rawInput, Base64.DEFAULT).use { decodedInput ->
+                            decodedInput.copyTo(output)
+                        }
+                    }
+                }
+            )
+        } finally {
+            session.tempFile.delete()
+        }
+    }
+
+    @Synchronized
+    private fun cancelAllChunkedDownloads() {
+        chunkedDownloadSessions.values.forEach { session -> session.tempFile.delete() }
+        chunkedDownloadSessions.clear()
+    }
+
+    suspend fun persistStream(
+        rawFileName: String?,
+        fallbackUrl: String?,
+        mimeType: String,
+        inputStream: InputStream
+    ): BlobDownloadSavedFile {
+        val fileName = resolveFileName(
+            rawName = rawFileName ?: URLUtil.guessFileName(fallbackUrl.orEmpty(), null, mimeType)
+        )
+        val resolvedMimeType = mimeType.trim().ifBlank { "application/octet-stream" }
+        return persistBytes(
+            fileName = fileName,
+            mimeType = resolvedMimeType,
+            writeBytes = { output ->
+                inputStream.use { input -> input.copyTo(output) }
+            }
+        )
+    }
+
+    private fun persistBytes(
+        fileName: String,
+        mimeType: String,
+        writeBytes: (java.io.OutputStream) -> Unit
+    ): BlobDownloadSavedFile {
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, request.fileName)
-            put(MediaStore.MediaColumns.MIME_TYPE, request.mimeType)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -361,7 +559,7 @@ class BlobDownloadController(
 
         try {
             contentResolver.openOutputStream(targetUri)?.use { output ->
-                output.write(Base64.decode(request.base64Data, Base64.DEFAULT))
+                writeBytes(output)
                 output.flush()
             } ?: throw IllegalStateException("无法写入下载文件")
 
@@ -369,10 +567,10 @@ class BlobDownloadController(
                 put(MediaStore.MediaColumns.IS_PENDING, 0)
             }
             contentResolver.update(targetUri, completedValues, null, null)
-            val savedFileName = resolvePersistedDisplayName(targetUri, request.fileName)
+            val savedFileName = resolvePersistedDisplayName(targetUri, fileName)
             return BlobDownloadSavedFile(
                 fileName = savedFileName,
-                mimeType = request.mimeType,
+                mimeType = mimeType,
                 contentUri = targetUri.toString(),
                 displayPath = buildDownloadsDisplayPath(savedFileName)
             )

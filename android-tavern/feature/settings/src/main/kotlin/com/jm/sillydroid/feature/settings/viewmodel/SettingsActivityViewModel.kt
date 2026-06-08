@@ -2,6 +2,7 @@ package com.jm.sillydroid.feature.settings.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.BrowserDataClearOptions
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
@@ -18,6 +19,7 @@ class SettingsActivityViewModel(
     private val _uiState = MutableStateFlow(
         SettingsActivityUiState(
             hostDisplayMode = hostPreferencesRepository.hostDisplayMode,
+            browserEngine = hostPreferencesRepository.browserEngine,
             backgroundOnlyModeEnabled = !hostPreferencesRepository.launchWebViewOnReady,
             backgroundHealthCheckEnabled = hostPreferencesRepository.backgroundHealthCheckEnabled,
             floatingLogsEnabled = hostPreferencesRepository.floatingLogBubbleEnabled,
@@ -47,6 +49,21 @@ class SettingsActivityViewModel(
             hostPreferencesRepository.hostDisplayMode = mode
         }
         _uiState.update { current -> current.copy(hostDisplayMode = mode) }
+    }
+
+    fun setBrowserEngine(engine: BrowserEngine) {
+        val changed = hostPreferencesRepository.browserEngine != engine
+        if (changed) {
+            hostPreferencesRepository.browserEngine = engine
+        }
+        _uiState.update { current ->
+            current.copy(
+                browserEngine = engine,
+                // 浏览器引擎切换会替换整个主界面 browser host；设置页只返回重建信号，
+                // 避免把内核切换伪装成普通 WebView reload 或清缓存。
+                shouldRecreateMainActivity = current.shouldRecreateMainActivity || changed
+            )
+        }
     }
 
     fun setBackgroundOnlyModeEnabled(enabled: Boolean) {
@@ -91,6 +108,7 @@ class SettingsActivityViewModel(
         shouldStartBootstrap: Boolean = false,
         shouldReloadTavernUi: Boolean = false,
         shouldForceFreshWebViewLoad: Boolean = false,
+        shouldRecreateMainActivity: Boolean = false,
         browserDataClearMask: Int = 0
     ) {
         _uiState.update { current ->
@@ -99,6 +117,7 @@ class SettingsActivityViewModel(
                 shouldStartBootstrap = current.shouldStartBootstrap || shouldStartBootstrap,
                 shouldReloadTavernUi = current.shouldReloadTavernUi || shouldReloadTavernUi,
                 shouldForceFreshWebViewLoad = current.shouldForceFreshWebViewLoad || shouldForceFreshWebViewLoad,
+                shouldRecreateMainActivity = current.shouldRecreateMainActivity || shouldRecreateMainActivity,
                 browserDataClearMask = current.browserDataClearMask or normalizedBrowserDataClearMask
             )
         }

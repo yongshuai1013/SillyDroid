@@ -8,6 +8,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.feature.settings.R
 import com.jm.sillydroid.feature.settings.model.SettingsActivityUiState
@@ -21,6 +22,8 @@ class SettingsActivityStateController(
     private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val backgroundHealthCheckSwitch: MaterialSwitch,
     private val pullRefreshSwitch: MaterialSwitch,
+    private val browserEngineRow: View,
+    private val browserEngineValueView: TextView,
     private val hostDisplayModeRow: View,
     private val hostDisplayModeValueView: TextView,
     private val debugDiagnosticsSwitch: MaterialSwitch,
@@ -45,6 +48,10 @@ class SettingsActivityStateController(
         pullRefreshSwitch.isChecked = initialState.pullRefreshEnabled
         pullRefreshSwitch.setOnCheckedChangeListener { _, isChecked ->
             viewModel.setPullRefreshEnabled(isChecked)
+        }
+        browserEngineValueView.text = resolveBrowserEngineLabel(initialState.browserEngine)
+        browserEngineRow.setOnClickListener {
+            showBrowserEngineDialog(viewModel.uiState.value.browserEngine)
         }
         hostDisplayModeValueView.text = resolveHostDisplayModeLabel(initialState.hostDisplayMode)
         hostDisplayModeRow.setOnClickListener {
@@ -82,6 +89,10 @@ class SettingsActivityStateController(
         if (pullRefreshSwitch.isChecked != state.pullRefreshEnabled) {
             pullRefreshSwitch.isChecked = state.pullRefreshEnabled
         }
+        val browserEngineLabel = resolveBrowserEngineLabel(state.browserEngine)
+        if (browserEngineValueView.text?.toString() != browserEngineLabel) {
+            browserEngineValueView.text = browserEngineLabel
+        }
         val hostDisplayModeLabel = resolveHostDisplayModeLabel(state.hostDisplayMode)
         if (hostDisplayModeValueView.text?.toString() != hostDisplayModeLabel) {
             hostDisplayModeValueView.text = hostDisplayModeLabel
@@ -109,6 +120,28 @@ class SettingsActivityStateController(
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun showBrowserEngineDialog(currentEngine: BrowserEngine) {
+        val engines = BrowserEngine.entries
+        val optionLabels = engines.map(::resolveBrowserEngineLabel).toTypedArray()
+        val checkedItem = engines.indexOf(currentEngine).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.bootstrap_settings_host_browser_engine_dialog_title)
+            .setSingleChoiceItems(optionLabels, checkedItem) { dialog, which ->
+                val selectedEngine = engines[which]
+                viewModel.setBrowserEngine(selectedEngine)
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun resolveBrowserEngineLabel(engine: BrowserEngine): String {
+        return when (engine) {
+            BrowserEngine.SYSTEM_WEBVIEW -> activity.getString(R.string.bootstrap_settings_host_browser_engine_system_webview)
+            BrowserEngine.GECKOVIEW -> activity.getString(R.string.bootstrap_settings_host_browser_engine_geckoview)
+        }
     }
 
     private fun resolveHostDisplayModeLabel(mode: HostDisplayMode): String {

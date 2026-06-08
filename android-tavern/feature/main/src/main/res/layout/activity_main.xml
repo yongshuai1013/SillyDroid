@@ -15,14 +15,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@color/tavern_webview_background"
-            android:visibility="gone">
-
-            <WebView
-                android:id="@+id/webView"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@color/tavern_webview_background" />
-        </FrameLayout>
+            android:visibility="gone" />
 
         <View
             android:id="@+id/webViewPullRefreshHintArc"
@@ -330,6 +323,36 @@
                     android:textAppearance="@style/TextAppearance.SillyDroid.SettingsBody"
                     android:textColor="@color/floating_logs_panel_secondary_text"
                     android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/floatingLogsBrowserZoomRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/sillydroid_space_sm"
+                    android:background="@drawable/bg_floating_logs_panel_surface"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="@dimen/sillydroid_space_md"
+                    android:paddingTop="@dimen/sillydroid_space_xs"
+                    android:paddingEnd="@dimen/sillydroid_space_md"
+                    android:paddingBottom="@dimen/sillydroid_space_xs">
+
+                    <TextView
+                        android:id="@+id/floatingLogsBrowserZoomLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="@dimen/sillydroid_floating_logs_interval_control_width"
+                        android:text="@string/floating_logs_browser_zoom_label_default"
+                        android:textAppearance="@style/TextAppearance.SillyDroid.SettingsMeta"
+                        android:textColor="@color/floating_logs_panel_secondary_text" />
+
+                    <SeekBar
+                        android:id="@+id/floatingLogsBrowserZoomSlider"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/sillydroid_space_md"
+                        android:layout_weight="1" />
+                </LinearLayout>
 
                 <FrameLayout
                     android:layout_width="match_parent"

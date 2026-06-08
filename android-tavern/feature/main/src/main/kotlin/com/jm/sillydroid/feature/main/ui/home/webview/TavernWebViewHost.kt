@@ -15,8 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.util.Log
-import android.view.ViewGroup
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebStorage
@@ -29,8 +29,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.webkit.WebViewCompat
 import com.jm.sillydroid.core.model.bootstrap.BootstrapSessionSnapshot
+import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.BrowserDataClearOptions
 import com.jm.sillydroid.core.model.settings.BrowserDataClearTarget
+import com.jm.sillydroid.core.model.settings.BrowserZoomOptions
 import com.jm.sillydroid.domain.bootstrap.BootstrapController
 import com.jm.sillydroid.domain.bootstrap.RuntimeConfigRepository
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
@@ -38,6 +40,8 @@ import com.jm.sillydroid.feature.main.R
 import com.jm.sillydroid.feature.main.diagnostics.formatTrimMemoryLevel
 import com.jm.sillydroid.feature.main.diagnostics.normalizeDiagnosticValue
 import com.jm.sillydroid.feature.main.model.download.BrowserDownloadRequest
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeInstaller
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeTarget
 import com.jm.sillydroid.feature.main.ui.home.HomeViewModel
 
 /**
@@ -57,8 +61,7 @@ class TavernWebViewHost(
     private val hostConfigStore: HostPreferencesRepository,
     private val runtimeConfigRepository: RuntimeConfigRepository,
     private val processManager: BootstrapController,
-    private val installJavascriptInterfaces: (WebView) -> Unit,
-    private val installBlobBridgeScriptOnPageFinished: (WebView) -> Unit,
+    private val bridgeInstaller: BrowserHostBridgeInstaller,
     private val restoreHostSystemBarAppearance: () -> Unit = {},
     private val onDownloadRequested: (BrowserDownloadRequest) -> Unit,
     private val onShowFileChooser: (android.webkit.WebChromeClient.FileChooserParams, android.webkit.ValueCallback<Array<Uri>>) -> Unit,
@@ -67,11 +70,10 @@ class TavernWebViewHost(
     private val criticalHostDiagnosticSink: HostDiagnosticSink = HostDiagnosticSink { _, _ -> },
     private val refreshApplicationExitInfo: () -> Unit = {},
     private val uploadRendererGoneLogBundle: (WebViewRendererGoneInfo) -> Unit = {},
-) {
+    private val onWebViewRendererCrash: () -> Unit = {},
+) : TavernBrowserHost {
     companion object {
         private const val LOG_TAG = "SillyDroidMain"
-        private const val SYSTEM_NOTIFICATION_BRIDGE_NAME = "AndroidSystemNotificationBridge"
-        private const val ANDROID_HOST_BRIDGE_NAME = "SillyDroidAndroidHostBridge"
         // 仅 debug 包响应；用来手动踏 renderer-gone 路径。
         // adb shell am broadcast -a com.jm.sillydroid.debug.CRASH_RENDERER -p com.jm.sillydroid
         // adb shell am broadcast -a com.jm.sillydroid.debug.KILL_RENDERER  -p com.jm.sillydroid
@@ -82,8 +84,20 @@ class TavernWebViewHost(
         private val RENDERER_EXIT_INFO_REFRESH_DELAYS_MS = longArrayOf(1_500L, 5_000L)
     }
 
-    val webViewRefreshLayout: View = activity.findViewById(R.id.webViewRefreshLayout)
-    val webView: WebView = activity.findViewById(R.id.webView)
+    override val browserEngine: BrowserEngine = BrowserEngine.SYSTEM_WEBVIEW
+    val webViewRefreshLayout: ViewGroup = activity.findViewById(R.id.webViewRefreshLayout)
+    val webView: WebView = WebView(activity).also { createdWebView ->
+        // 浏览器 surface 由具体 host 动态创建，避免 GeckoView 模式也提前 inflate 系统 WebView provider。
+        createdWebView.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        webViewRefreshLayout.addView(createdWebView)
+    }
+    override val browserContainer: View
+        get() = webViewRefreshLayout
+    override val browserSurface: View
+        get() = webView
     private val webViewPullRefreshHint: LinearLayout = activity.findViewById(R.id.webViewPullRefreshHint)
     private val webViewPullRefreshHintArc: View = activity.findViewById(R.id.webViewPullRefreshHintArc)
     private val webViewPullRefreshHintIcon: ImageView = activity.findViewById(R.id.webViewPullRefreshHintIcon)
@@ -111,7 +125,7 @@ class TavernWebViewHost(
             context = activity,
             webViewProvider = { webView },
             installDocumentStartScripts = ::installWebDocumentStartScriptController,
-            installJavascriptInterfaces = installJavascriptInterfaces,
+            installJavascriptInterfaces = ::installBrowserHostBridge,
             shouldOpenExternally = ::shouldOpenExternally,
             openExternalBrowser = ::openExternalBrowser,
             onPageStarted = ::handleWebViewPageStarted,
@@ -162,10 +176,32 @@ class TavernWebViewHost(
         )
     }
 
-    fun configure() {
+    override fun currentBrowserRuntimeInfo(): BrowserRuntimeInfo {
+        val compatibility = currentRuntimeCompatibility()
+        return BrowserRuntimeInfo(
+            engine = browserEngine,
+            runtimeName = "Android WebView",
+            packageName = compatibility.providerPackageName,
+            versionName = compatibility.providerVersionName,
+            versionCode = compatibility.providerVersionCode,
+            coreName = "Chromium",
+            coreVersion = compatibility.chromiumVersion,
+            coreMajorVersion = compatibility.chromiumMajorVersion,
+            recommendedCoreMajorVersion = WebViewRuntimeCompatibility.recommendedChromiumMajorVersion(),
+            outdated = compatibility.isOutdated,
+            userAgent = compatibility.userAgent
+        )
+    }
+
+    override fun currentBrowserZoomPercent(): Int {
+        return BrowserZoomOptions.sanitize(webView.settings.textZoom)
+    }
+
+    override fun configure() {
         val webViewBackgroundColor = ContextCompat.getColor(activity, R.color.tavern_webview_background)
         homeWebViewRefreshController.configure(webViewBackgroundColor)
         homeWebViewController.configure()
+        setBrowserZoomPercent(hostConfigStore.browserZoomPercent)
         restoreHostSystemBarAppearance()
         installDebugRendererCrashReceiverIfDebuggable()
         recordHostDiagnostic(
@@ -177,6 +213,10 @@ class TavernWebViewHost(
                 append(currentWebViewDiagnosticState())
             }
         )
+    }
+
+    override fun showBrowser(baseUrl: String) {
+        showWebView(baseUrl)
     }
 
     fun showWebView(baseUrl: String) {
@@ -208,7 +248,7 @@ class TavernWebViewHost(
         webView.loadUrl(targetUrl)
     }
 
-    fun hideForBootstrapRestart() {
+    override fun hideForBootstrapRestart() {
         homeViewModel.isPullGestureRefreshing = false
         homeWebViewRefreshController.reset()
         webViewRefreshLayout.isVisible = false
@@ -248,51 +288,52 @@ class TavernWebViewHost(
         webView.loadUrl(targetUrl)
     }
 
-    fun reloadTavernUiIfPossible(snapshot: BootstrapSessionSnapshot) {
+    override fun reloadTavernUiIfPossible(snapshot: BootstrapSessionSnapshot) {
         if (!snapshot.isReady || !webView.isVisible) {
             return
         }
         reloadTavernWebView(source = "host_state_ready")
     }
 
-    fun reloadTavernWebView(source: String): Boolean {
+    override fun reloadTavernWebView(source: String): Boolean {
         return homeWebViewRefreshController.reload(source)
     }
 
-    fun updateRefreshLayoutEnabled() {
+    override fun updateRefreshLayoutEnabled() {
         homeWebViewRefreshController.updateEnabled()
     }
 
-    fun resetRefreshOnBootstrapEvent() {
+    override fun resetRefreshOnBootstrapEvent() {
         homeViewModel.isPullGestureRefreshing = false
         homeWebViewRefreshController.reset()
     }
 
-    fun onImeVisibilityChanged(visible: Boolean) {
+    override fun onImeVisibilityChanged(visible: Boolean) {
         if (visible) {
             homeWebViewRefreshController.reset()
         }
         updateRefreshLayoutEnabled()
     }
 
-    fun onTrimMemory(level: Int) {
+    override fun onTrimMemory(level: Int) {
         recordCriticalHostDiagnostic(
             category = "memory",
             body = "scope=main_activity_webview event=on_trim_memory level=${formatTrimMemoryLevel(level)} rawLevel=$level ${currentWebViewDiagnosticState()} ${currentHostMemoryDiagnosticState()}"
         )
     }
 
-    fun onLowMemory() {
+    override fun onLowMemory() {
         recordCriticalHostDiagnostic(
             category = "memory",
             body = "scope=main_activity_webview event=on_low_memory ${currentWebViewDiagnosticState()} ${currentHostMemoryDiagnosticState()}"
         )
     }
 
-    fun onDestroy() {
+    override fun onDestroy() {
         uninstallDebugRendererCrashReceiver()
         webDocumentStartScriptController?.close()
         webDocumentStartScriptController = null
+        bridgeInstaller.close()
         destroyWebViewForActivityTeardown()
     }
 
@@ -307,8 +348,8 @@ class TavernWebViewHost(
         runCatching { webView.loadUrl("about:blank") }
         runCatching { webView.webChromeClient = null }
         runCatching { webView.webViewClient = android.webkit.WebViewClient() }
-        runCatching { webView.removeJavascriptInterface(SYSTEM_NOTIFICATION_BRIDGE_NAME) }
-        runCatching { webView.removeJavascriptInterface(ANDROID_HOST_BRIDGE_NAME) }
+        runCatching { webView.removeJavascriptInterface(bridgeInstaller.systemNotificationBridgeName) }
+        runCatching { webView.removeJavascriptInterface(bridgeInstaller.androidHostBridgeName) }
         runCatching { (webView.parent as? ViewGroup)?.removeView(webView) }
         runCatching { webView.destroy() }
             .onFailure { error ->
@@ -394,11 +435,19 @@ class TavernWebViewHost(
     }
 
     fun openExternalBrowser(targetUri: Uri): Boolean {
-        launchExternalBrowser(targetUri)
-        return true
+        return launchExternalBrowser(targetUri)
     }
 
-    fun openCurrentPageInExternalBrowser(): Boolean {
+    override fun openUrlInExternalBrowser(url: String): Boolean {
+        val targetUrl = url.trim()
+        if (targetUrl.isBlank()) {
+            showOpenExternalBrowserFailure()
+            return false
+        }
+        return launchExternalBrowser(Uri.parse(targetUrl))
+    }
+
+    override fun openCurrentPageInExternalBrowser(): Boolean {
         // 宿主设置里的“在浏览器中打开”必须带出当前酒馆页，避免外部浏览器只回首页后丢掉当前路由上下文。
         val targetUrl = currentKnownWebViewUrl().trim()
         if (targetUrl.isBlank()) {
@@ -453,7 +502,8 @@ class TavernWebViewHost(
         homeWebViewRefreshController.reset()
         updateRefreshLayoutEnabled()
         CookieManager.getInstance().flush()
-        installBlobBridgeScriptOnPageFinished(sourceWebView)
+        setBrowserZoomPercent(hostConfigStore.browserZoomPercent)
+        bridgeInstaller.installAfterPageFinished(buildBridgeTarget(sourceWebView))
         installSystemBarThemeSyncScript(sourceWebView)
         installWebPerformanceDiagnosticScript(sourceWebView)
         if (!url.isNullOrBlank()) {
@@ -466,10 +516,11 @@ class TavernWebViewHost(
     private fun installSystemBarThemeSyncScript(sourceWebView: WebView) {
         // 酒馆内部主题切换多半是前端改 html/body 的 class/style，不一定整页 reload；
         // 这里给当前文档挂一个 observer，首次进入和后续主题切换都把根背景色同步给 Android 系统栏。
+        val androidHostBridgeNameJson = org.json.JSONObject.quote(bridgeInstaller.androidHostBridgeName)
         sourceWebView.evaluateJavascript(
             """
                 (function() {
-                    const bridge = window.SillyDroidAndroidHostBridge;
+                    const bridge = window[$androidHostBridgeNameJson];
                     if (!bridge || typeof bridge.setSystemBarsBackgroundColor !== 'function') {
                         return 'bridge_missing';
                     }
@@ -589,6 +640,7 @@ class TavernWebViewHost(
 
     private fun installWebPerformanceDiagnosticScript(sourceWebView: WebView) {
         // 只在页面 load 后上报一次聚合性能摘要，用来同机对比 Chrome 与 App WebView 的真实瓶颈。
+        val androidHostBridgeNameJson = org.json.JSONObject.quote(bridgeInstaller.androidHostBridgeName)
         sourceWebView.evaluateJavascript(
             """
                 (function() {
@@ -597,7 +649,7 @@ class TavernWebViewHost(
                     }
                     window.__sillyDroidWebPerformanceDiagnosticInstalled = true;
 
-                    const bridge = window.SillyDroidAndroidHostBridge;
+                    const bridge = window[$androidHostBridgeNameJson];
                     if (!bridge || typeof bridge.recordWebPerformanceDiagnostic !== 'function') {
                         return 'bridge_missing';
                     }
@@ -633,9 +685,328 @@ class TavernWebViewHost(
                         }
                     }
 
+                    function isIndexedDbAvailable() {
+                        try {
+                            return typeof indexedDB !== 'undefined' && !!indexedDB;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isStorageAvailable(name) {
+                        try {
+                            const storage = window[name];
+                            if (!storage) {
+                                return false;
+                            }
+                            const key = '__sillydroid_storage_probe__';
+                            storage.setItem(key, '1');
+                            storage.removeItem(key);
+                            return true;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isCacheStorageAvailable() {
+                        try {
+                            return typeof caches !== 'undefined' && !!caches;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isWebGlAvailable() {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            return !!(canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl'));
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function webGlContextInfo() {
+                        const emptyInfo = {
+                            available: false,
+                            contextName: '',
+                            version: '',
+                            shadingLanguageVersion: '',
+                            vendor: '',
+                            renderer: '',
+                            unmaskedVendor: '',
+                            unmaskedRenderer: ''
+                        };
+                        try {
+                            const canvas = document.createElement('canvas');
+                            const contextNames = ['webgl2', 'webgl', 'experimental-webgl'];
+                            let gl = null;
+                            let contextName = '';
+                            for (let index = 0; index < contextNames.length; index += 1) {
+                                contextName = contextNames[index];
+                                gl = canvas.getContext(contextName);
+                                if (gl) {
+                                    break;
+                                }
+                            }
+                            if (!gl) {
+                                return emptyInfo;
+                            }
+                            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                            return {
+                                available: true,
+                                contextName,
+                                version: compactText(gl.getParameter(gl.VERSION), 120),
+                                shadingLanguageVersion: compactText(gl.getParameter(gl.SHADING_LANGUAGE_VERSION), 120),
+                                vendor: compactText(gl.getParameter(gl.VENDOR), 120),
+                                renderer: compactText(gl.getParameter(gl.RENDERER), 160),
+                                unmaskedVendor: compactText(debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : '', 120),
+                                unmaskedRenderer: compactText(debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : '', 180)
+                            };
+                        } catch (error) {
+                            return emptyInfo;
+                        }
+                    }
+
+                    function isWebGpuAvailable() {
+                        try {
+                            return typeof navigator !== 'undefined' && !!navigator.gpu;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isWorkerAvailable() {
+                        try {
+                            return typeof Worker !== 'undefined';
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isSharedWorkerAvailable() {
+                        try {
+                            return typeof SharedWorker !== 'undefined';
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isServiceWorkerAvailable() {
+                        try {
+                            return typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isWasmAvailable() {
+                        try {
+                            return typeof WebAssembly !== 'undefined' && typeof WebAssembly.instantiate === 'function';
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function isOffscreenCanvasAvailable() {
+                        try {
+                            return typeof OffscreenCanvas !== 'undefined';
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function compactText(value, limit) {
+                        const text = String(value || '').replace(/\s+/g, ' ').trim();
+                        if (!text) {
+                            return '';
+                        }
+                        return text.length <= limit ? text : text.slice(0, limit) + '...';
+                    }
+
+                    function viewportMetaContent() {
+                        const viewportMeta = document.querySelector('meta[name="viewport"]');
+                        return viewportMeta ? viewportMeta.getAttribute('content') || '' : '';
+                    }
+
+                    function computedFontSizePx(node) {
+                        try {
+                            const fontSize = node ? window.getComputedStyle(node).fontSize : '';
+                            return round(Number.parseFloat(fontSize) || 0);
+                        } catch (error) {
+                            return 0;
+                        }
+                    }
+
+                    function computedCssZoom(node) {
+                        try {
+                            const zoom = node ? window.getComputedStyle(node).zoom : '';
+                            return Number.parseFloat(zoom) || 0;
+                        } catch (error) {
+                            return 0;
+                        }
+                    }
+
+                    function computedLineHeightPx(node) {
+                        try {
+                            const style = node ? window.getComputedStyle(node) : null;
+                            if (!style) {
+                                return 0;
+                            }
+                            const lineHeight = Number.parseFloat(style.lineHeight || '');
+                            if (Number.isFinite(lineHeight)) {
+                                return round(lineHeight);
+                            }
+                            return computedFontSizePx(node);
+                        } catch (error) {
+                            return 0;
+                        }
+                    }
+
+                    function computedTextSizeAdjust(node) {
+                        try {
+                            const style = node ? window.getComputedStyle(node) : null;
+                            if (!style) {
+                                return '';
+                            }
+                            return compactText(
+                                style.getPropertyValue('-webkit-text-size-adjust') ||
+                                    style.getPropertyValue('text-size-adjust') ||
+                                    style.webkitTextSizeAdjust ||
+                                    '',
+                                40
+                            );
+                        } catch (error) {
+                            return '';
+                        }
+                    }
+
+                    function computedFontFamily(node) {
+                        try {
+                            return compactText(node ? window.getComputedStyle(node).fontFamily : '', 80);
+                        } catch (error) {
+                            return '';
+                        }
+                    }
+
+                    function elementMetric(selector) {
+                        try {
+                            const node = document.querySelector(selector);
+                            if (!node) {
+                                return null;
+                            }
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return {
+                                width: round(rect.width),
+                                height: round(rect.height),
+                                top: round(rect.top),
+                                bottom: round(rect.bottom),
+                                display: compactText(style.display, 24),
+                                fontSizePx: round(Number.parseFloat(style.fontSize || '') || 0),
+                                lineHeightPx: round(Number.parseFloat(style.lineHeight || '') || 0)
+                            };
+                        } catch (error) {
+                            return null;
+                        }
+                    }
+
+                    function mediaMatches(query) {
+                        try {
+                            return typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
+                        } catch (error) {
+                            return false;
+                        }
+                    }
+
+                    function filePickerCapabilitySummary() {
+                        return {
+                            showOpenFilePickerAvailable: typeof window.showOpenFilePicker === 'function',
+                            showSaveFilePickerAvailable: typeof window.showSaveFilePicker === 'function',
+                            showDirectoryPickerAvailable: typeof window.showDirectoryPicker === 'function'
+                        };
+                    }
+
+                    function clipboardCapabilitySummary() {
+                        const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null;
+                        return {
+                            clipboardApiAvailable: !!clipboard,
+                            clipboardReadAvailable: !!clipboard && typeof clipboard.read === 'function',
+                            clipboardReadTextAvailable: !!clipboard && typeof clipboard.readText === 'function',
+                            clipboardWriteAvailable: !!clipboard && typeof clipboard.write === 'function',
+                            clipboardWriteTextAvailable: !!clipboard && typeof clipboard.writeText === 'function'
+                        };
+                    }
+
+                    function inputCapabilitySummary() {
+                        return {
+                            pointerEventAvailable: typeof PointerEvent !== 'undefined',
+                            touchEventAvailable: typeof TouchEvent !== 'undefined',
+                            maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0
+                        };
+                    }
+
+                    function compactCapabilityValue(value) {
+                        if (value == null) {
+                            return '-';
+                        }
+                        if (typeof value === 'string') {
+                            return value.replace(/\s+/g, '_').slice(0, 80) || '-';
+                        }
+                        if (typeof value === 'object') {
+                            return JSON.stringify(value).replace(/\s+/g, '_').slice(0, 120);
+                        }
+                        return String(value);
+                    }
+
+                    function buildCompactCapabilitySummary(summary) {
+                        const topBar = summary.layoutMetrics && summary.layoutMetrics.topBar || {};
+                        const sendForm = summary.layoutMetrics && summary.layoutMetrics.sendForm || {};
+                        // 短摘要保留缩放、GPU、存储和输入能力关键字段，避免完整 JSON 被日志长度裁剪后丢失定位点。
+                        return [
+                            'event=page_capability_summary',
+                            'browserEngine=SYSTEM_WEBVIEW',
+                            'viewportInnerWidth=' + compactCapabilityValue(summary.viewportInnerWidth),
+                            'visualViewportWidth=' + compactCapabilityValue(summary.visualViewportWidth),
+                            'visualViewportScale=' + compactCapabilityValue(summary.visualViewportScale),
+                            'devicePixelRatio=' + compactCapabilityValue(summary.devicePixelRatio),
+                            'screenWidth=' + compactCapabilityValue(summary.screenWidth),
+                            'rootFontSizePx=' + compactCapabilityValue(summary.rootFontSizePx),
+                            'bodyFontSizePx=' + compactCapabilityValue(summary.bodyFontSizePx),
+                            'rootLineHeightPx=' + compactCapabilityValue(summary.rootLineHeightPx),
+                            'rootCssZoom=' + compactCapabilityValue(summary.rootCssZoom),
+                            'bodyCssZoom=' + compactCapabilityValue(summary.bodyCssZoom),
+                            'rootTextSizeAdjust=' + compactCapabilityValue(summary.rootTextSizeAdjust),
+                            'viewportMeta=' + compactCapabilityValue(summary.viewportMetaContent),
+                            'mediaWidthMax360=' + compactCapabilityValue(summary.mediaWidthMax360),
+                            'mediaWidthMin390=' + compactCapabilityValue(summary.mediaWidthMin390),
+                            'mediaWidthMin600=' + compactCapabilityValue(summary.mediaWidthMin600),
+                            'topBarHeight=' + compactCapabilityValue(topBar.height),
+                            'sendFormHeight=' + compactCapabilityValue(sendForm.height),
+                            'indexedDb=' + compactCapabilityValue(summary.indexedDbAvailable),
+                            'localStorage=' + compactCapabilityValue(summary.localStorageAvailable),
+                            'cacheStorage=' + compactCapabilityValue(summary.cacheStorageAvailable),
+                            'webGl=' + compactCapabilityValue(summary.webGlAvailable),
+                            'webGlContext=' + compactCapabilityValue(summary.webGlContextName),
+                            'webGlRenderer=' + compactCapabilityValue(summary.webGlUnmaskedRenderer || summary.webGlRenderer),
+                            'webGpu=' + compactCapabilityValue(summary.webGpuAvailable),
+                            'worker=' + compactCapabilityValue(summary.webWorkerAvailable),
+                            'wasm=' + compactCapabilityValue(summary.wasmAvailable),
+                            'offscreenCanvas=' + compactCapabilityValue(summary.offscreenCanvasAvailable),
+                            'secureContext=' + compactCapabilityValue(summary.secureContext),
+                            'clipboardWriteText=' + compactCapabilityValue(summary.clipboardCapabilities && summary.clipboardCapabilities.clipboardWriteTextAvailable),
+                            'showOpenFilePicker=' + compactCapabilityValue(summary.filePickerCapabilities && summary.filePickerCapabilities.showOpenFilePickerAvailable),
+                            'pointerEvent=' + compactCapabilityValue(summary.inputCapabilities && summary.inputCapabilities.pointerEventAvailable),
+                            'maxTouchPoints=' + compactCapabilityValue(summary.inputCapabilities && summary.inputCapabilities.maxTouchPoints)
+                        ].join(' ');
+                    }
+
                     function buildSummary() {
                         const nav = performance.getEntriesByType('navigation')[0];
                         const resources = performance.getEntriesByType('resource');
+                        const webGlInfo = webGlContextInfo();
+                        const filePickerCapabilities = filePickerCapabilitySummary();
+                        const clipboardCapabilities = clipboardCapabilitySummary();
+                        const inputCapabilities = inputCapabilitySummary();
                         const slowResources = resources
                             .filter(function(entry) { return (entry.duration || 0) >= 250; })
                             .sort(function(left, right) { return (right.duration || 0) - (left.duration || 0); })
@@ -653,6 +1024,7 @@ class TavernWebViewHost(
                         const sortedLongTasks = longTasks.slice().sort(function(left, right) { return right - left; });
                         return {
                             event: 'page_load_summary',
+                            browserEngine: 'SYSTEM_WEBVIEW',
                             hrefHost: hostKind(location.href),
                             navType: nav ? nav.type : 'unknown',
                             domContentLoadedMs: nav ? round(nav.domContentLoadedEventEnd - nav.startTime) : 0,
@@ -665,7 +1037,73 @@ class TavernWebViewHost(
                             slowResources: slowResources,
                             longTaskCount: longTasks.length,
                             maxLongTaskMs: sortedLongTasks[0] || 0,
-                            topLongTasksMs: sortedLongTasks.slice(0, 5)
+                            topLongTasksMs: sortedLongTasks.slice(0, 5),
+                            viewportInnerWidth: round(window.innerWidth || 0),
+                            viewportInnerHeight: round(window.innerHeight || 0),
+                            documentClientWidth: round(document.documentElement ? document.documentElement.clientWidth : 0),
+                            documentClientHeight: round(document.documentElement ? document.documentElement.clientHeight : 0),
+                            visualViewportWidth: round(window.visualViewport ? window.visualViewport.width : 0),
+                            visualViewportHeight: round(window.visualViewport ? window.visualViewport.height : 0),
+                            visualViewportScale: window.visualViewport && Number.isFinite(window.visualViewport.scale) ? window.visualViewport.scale : 0,
+                            devicePixelRatio: window.devicePixelRatio || 0,
+                            outerWidth: round(window.outerWidth || 0),
+                            outerHeight: round(window.outerHeight || 0),
+                            screenWidth: round(window.screen ? window.screen.width : 0),
+                            screenHeight: round(window.screen ? window.screen.height : 0),
+                            screenAvailWidth: round(window.screen ? window.screen.availWidth : 0),
+                            screenAvailHeight: round(window.screen ? window.screen.availHeight : 0),
+                            userAgentFamily: navigator.userAgent && navigator.userAgent.includes('Firefox') ? 'firefox' : 'other',
+                            userAgent: compactText(navigator.userAgent, 180),
+                            viewportMetaContent: compactText(viewportMetaContent(), 180),
+                            rootFontSizePx: computedFontSizePx(document.documentElement),
+                            bodyFontSizePx: computedFontSizePx(document.body),
+                            rootLineHeightPx: computedLineHeightPx(document.documentElement),
+                            bodyLineHeightPx: computedLineHeightPx(document.body),
+                            rootTextSizeAdjust: computedTextSizeAdjust(document.documentElement),
+                            bodyTextSizeAdjust: computedTextSizeAdjust(document.body),
+                            rootFontFamily: computedFontFamily(document.documentElement),
+                            bodyFontFamily: computedFontFamily(document.body),
+                            rootCssZoom: computedCssZoom(document.documentElement),
+                            bodyCssZoom: computedCssZoom(document.body),
+                            mediaWidthMax360: mediaMatches('(max-width: 360px)'),
+                            mediaWidthMin390: mediaMatches('(min-width: 390px)'),
+                            mediaWidthMin600: mediaMatches('(min-width: 600px)'),
+                            mediaPointerCoarse: mediaMatches('(pointer: coarse)'),
+                            mediaPointerFine: mediaMatches('(pointer: fine)'),
+                            mediaHoverNone: mediaMatches('(hover: none)'),
+                            mediaHoverHover: mediaMatches('(hover: hover)'),
+                            mediaAnyPointerFine: mediaMatches('(any-pointer: fine)'),
+                            layoutMetrics: {
+                                topBar: elementMetric('#top-bar'),
+                                chat: elementMetric('#chat'),
+                                sendForm: elementMetric('#send_form'),
+                                leftNav: elementMetric('#left-nav-panel'),
+                                rightNav: elementMetric('#right-nav-panel')
+                            },
+                            hardwareConcurrency: navigator.hardwareConcurrency || 0,
+                            deviceMemoryGb: navigator.deviceMemory || 0,
+                            indexedDbAvailable: isIndexedDbAvailable(),
+                            localStorageAvailable: isStorageAvailable('localStorage'),
+                            sessionStorageAvailable: isStorageAvailable('sessionStorage'),
+                            cacheStorageAvailable: isCacheStorageAvailable(),
+                            webGlAvailable: webGlInfo.available || isWebGlAvailable(),
+                            webGlContextName: webGlInfo.contextName,
+                            webGlVersion: webGlInfo.version,
+                            webGlShadingLanguageVersion: webGlInfo.shadingLanguageVersion,
+                            webGlVendor: webGlInfo.vendor,
+                            webGlRenderer: webGlInfo.renderer,
+                            webGlUnmaskedVendor: webGlInfo.unmaskedVendor,
+                            webGlUnmaskedRenderer: webGlInfo.unmaskedRenderer,
+                            webGpuAvailable: isWebGpuAvailable(),
+                            webWorkerAvailable: isWorkerAvailable(),
+                            sharedWorkerAvailable: isSharedWorkerAvailable(),
+                            serviceWorkerAvailable: isServiceWorkerAvailable(),
+                            wasmAvailable: isWasmAvailable(),
+                            offscreenCanvasAvailable: isOffscreenCanvasAvailable(),
+                            secureContext: window.isSecureContext === true,
+                            filePickerCapabilities,
+                            clipboardCapabilities,
+                            inputCapabilities
                         };
                     }
 
@@ -678,7 +1116,9 @@ class TavernWebViewHost(
                             if (observer) {
                                 observer.disconnect();
                             }
-                            bridge.recordWebPerformanceDiagnostic(JSON.stringify(buildSummary()));
+                            const summary = buildSummary();
+                            bridge.recordWebPerformanceDiagnostic(buildCompactCapabilitySummary(summary));
+                            bridge.recordWebPerformanceDiagnostic(JSON.stringify(summary));
                         } catch (error) {
                             bridge.recordWebPerformanceDiagnostic('event=page_load_summary_failed reason=' + String(error && error.message || error));
                         }
@@ -701,6 +1141,10 @@ class TavernWebViewHost(
 
     private fun handleWebViewRendererGone(info: WebViewRendererGoneInfo) {
         val didCrash = info.didCrash
+        if (didCrash) {
+            // 只有真实 renderer crash 才提示用户切换浏览器引擎；系统回收/用户清理类退出不打扰。
+            onWebViewRendererCrash()
+        }
         val recoveryUrl = currentKnownWebViewUrl()
         val rendererGoneDetail = info.toDiagnosticText()
         val rendererFailureSnapshot = currentRendererFailureDiagnosticState(
@@ -806,12 +1250,30 @@ class TavernWebViewHost(
         )
     }
 
+    override fun setBrowserZoomPercent(percent: Int): Boolean {
+        val sanitizedPercent = BrowserZoomOptions.sanitize(percent)
+        if (webView.settings.textZoom != sanitizedPercent) {
+            webView.settings.textZoom = sanitizedPercent
+        }
+        recordCriticalHostDiagnostic(
+            category = "webview",
+            body = buildString {
+                append("event=browser_zoom_applied")
+                append(" engine=${browserEngine.name}")
+                append(" percent=$sanitizedPercent")
+                append(" mode=textZoom")
+                append(" webViewTextZoom=${webView.settings.textZoom}")
+            }
+        )
+        return webView.settings.textZoom == sanitizedPercent
+    }
+
     private fun installWebDocumentStartScriptController() {
         webDocumentStartScriptController?.close()
         webDocumentStartScriptController = WebDocumentStartScriptController(
             webView = webView,
-            systemNotificationBridgeName = SYSTEM_NOTIFICATION_BRIDGE_NAME,
-            androidHostBridgeName = ANDROID_HOST_BRIDGE_NAME,
+            systemNotificationBridgeName = bridgeInstaller.systemNotificationBridgeName,
+            androidHostBridgeName = bridgeInstaller.androidHostBridgeName,
             allowedOrigin = { runtimeConfigRepository.localServiceUrl() }
         ).also { controller ->
             val documentStartInstalled = controller.install()
@@ -992,6 +1454,18 @@ class TavernWebViewHost(
         }
     }
 
+    private fun installBrowserHostBridge(targetWebView: WebView) {
+        bridgeInstaller.install(buildBridgeTarget(targetWebView))
+    }
+
+    private fun buildBridgeTarget(targetWebView: WebView): BrowserHostBridgeTarget {
+        return BrowserHostBridgeTarget(
+            browserEngine = browserEngine,
+            surface = targetWebView,
+            allowedOrigin = runtimeConfigRepository.localServiceUrl()
+        )
+    }
+
     private fun isCurrentWebViewPageFor(baseUrl: String): Boolean {
         // 这里必须只看“当前这一个真实 WebView 实例”已经加载出的 URL。
         // 如果新建出来的 WebView 还停在 about:blank，不能把任何宿主记录冒充成当前已渲染页面，
@@ -1064,6 +1538,7 @@ class TavernWebViewHost(
             append(" webViewHardwareAccelerated=${webView.isHardwareAccelerated}")
             append(" webViewLayerType=${resolveViewLayerTypeName(webView.layerType)}")
             append(" webViewCacheMode=${resolveWebSettingsCacheModeName(webView.settings.cacheMode)}")
+            append(" webViewTextZoom=${webView.settings.textZoom}")
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 append(" rendererPriority=${resolveWebViewRendererPriorityName(webView.rendererRequestedPriority)}")
                 append(" rendererPriorityWaivedWhenNotVisible=${webView.rendererPriorityWaivedWhenNotVisible}")

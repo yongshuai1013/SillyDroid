@@ -85,6 +85,83 @@ class AndroidBlobDownloadBridge(
         }
     }
 
+    fun beginBase64File(payload: String?): Boolean {
+        val request = controller.parseChunkedStartRequest(payload)
+            ?: throw IllegalArgumentException("empty_or_invalid_chunked_start_payload")
+
+        // GeckoView 的 native messaging 需要分块传输较大的 base64 导出；这里先建立宿主侧临时会话，
+        // 后续 chunk 按顺序写入 cache，完成时再统一流式解码到下载目录。
+        controller.beginChunkedDownload(request)
+        recordDiagnostic(
+            "event=blob_bridge_chunked_begin downloadId=${request.downloadId} fileName=${request.fileName} " +
+                "mime=${request.mimeType} totalBase64Length=${request.totalBase64Length} chunkCount=${request.chunkCount}"
+        )
+        return true
+    }
+
+    fun appendBase64FileChunk(payload: String?): Boolean {
+        val request = controller.parseChunkRequest(payload)
+            ?: throw IllegalArgumentException("empty_or_invalid_chunk_payload")
+
+        controller.appendChunkedDownload(request)
+        recordDiagnostic(
+            "event=blob_bridge_chunked_chunk downloadId=${request.downloadId} index=${request.index} " +
+                "base64Length=${request.base64Data.length}"
+        )
+        return true
+    }
+
+    fun completeBase64File(payload: String?): Boolean {
+        val request = controller.parseChunkedCompleteRequest(payload)
+            ?: throw IllegalArgumentException("empty_or_invalid_chunked_complete_payload")
+
+        scope.launch {
+            recordDiagnostic(
+                "event=blob_bridge_chunked_save_requested downloadId=${request.downloadId} fileName=${request.fileName}"
+            )
+            onSaving(request.fileName)
+
+            val result = runCatching {
+                withContext(dispatchers.io) {
+                    controller.persistChunked(request.downloadId)
+                }
+            }
+
+            result.onSuccess { savedFile ->
+                recordDiagnostic(
+                    "event=blob_bridge_chunked_saved downloadId=${request.downloadId} " +
+                        "fileName=${savedFile.fileName} uri=${savedFile.contentUri}"
+                )
+                onSaved(savedFile)
+            }.onFailure { error ->
+                val message = error.message ?: unknownErrorMessage()
+                recordDiagnostic(
+                    "event=blob_bridge_chunked_save_failed downloadId=${request.downloadId} " +
+                        "fileName=${request.fileName} error=$message"
+                )
+                onFailure(
+                    DownloadFailureReport(
+                        fileName = request.fileName,
+                        message = message
+                    )
+                )
+            }
+        }
+        return true
+    }
+
+    fun cancelBase64File(payload: String?): Boolean {
+        val request = controller.parseChunkedCompleteRequest(payload)
+            ?: throw IllegalArgumentException("empty_or_invalid_chunked_cancel_payload")
+
+        controller.cancelChunkedDownload(request.downloadId)
+        recordDiagnostic(
+            "event=blob_bridge_chunked_cancel downloadId=${request.downloadId} fileName=${request.fileName} " +
+                "message=${request.message}"
+        )
+        return true
+    }
+
     @JavascriptInterface
     fun reportDownloadFailure(payload: String?) {
         val report = try {

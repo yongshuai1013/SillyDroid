@@ -52,6 +52,8 @@ class HostLogBundleUploaderTest {
             assertTrue(received[2].contains("name=\"versionName\""))
             assertTrue(received[2].contains("name=\"versionCode\""))
             assertTrue(received[2].contains("name=\"installationId\""))
+            assertTrue(received[2].contains("name=\"browserVersion\""))
+            assertTrue(received[2].contains("136.0.7103.125"))
             assertTrue(received[2].contains("test-upload"))
         } finally {
             server.stop(0)
@@ -66,6 +68,7 @@ class HostLogBundleUploaderTest {
         override fun installationId(): String = "install-a"
         override fun deviceModel(): String = "Pixel 8"
         override fun androidVersion(): String = "15"
+        override fun browserVersion(): String = "136.0.7103.125"
         override fun abi(): String = "arm64-v8a"
         override fun buildFingerprint(): String = "fingerprint-a"
     }

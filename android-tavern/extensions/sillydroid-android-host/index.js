@@ -485,6 +485,9 @@ function buildThemeRuntimeState(settings = getExtensionSettings(), resolvedMode 
         secondary: settings.themeSecondaryColor,
         systemBarColors,
         webViewMajor: performanceProfile.webViewMajor || 0,
+        browserEngine: performanceProfile.browserEngine || '',
+        browserCoreName: performanceProfile.browserCoreName || '',
+        browserCoreMajor: performanceProfile.browserCoreMajor || 0,
     };
 }
 
@@ -524,6 +527,24 @@ function applyThemeDataset(themeState) {
         html.dataset.sillydroidWebviewMajor = String(themeState.webViewMajor);
     } else {
         delete html.dataset.sillydroidWebviewMajor;
+        delete html.dataset.sillydroidBrowserEngine;
+        delete html.dataset.sillydroidBrowserCore;
+        delete html.dataset.sillydroidBrowserCoreMajor;
+    }
+    if (themeState.browserEngine) {
+        html.dataset.sillydroidBrowserEngine = String(themeState.browserEngine).toLowerCase();
+    } else {
+        delete html.dataset.sillydroidBrowserEngine;
+    }
+    if (themeState.browserCoreName) {
+        html.dataset.sillydroidBrowserCore = String(themeState.browserCoreName).toLowerCase();
+    } else {
+        delete html.dataset.sillydroidBrowserCore;
+    }
+    if (themeState.browserCoreMajor) {
+        html.dataset.sillydroidBrowserCoreMajor = String(themeState.browserCoreMajor);
+    } else {
+        delete html.dataset.sillydroidBrowserCoreMajor;
     }
 }
 
@@ -575,12 +596,51 @@ function parseChromeMajorFromUserAgent() {
     return match ? parsePositiveInteger(match[1]) : 0;
 }
 
+function resolveBrowserRuntimeProfile(hostInfo = getHostVersionInfo()) {
+    const browserEngine = String(hostInfo?.browserEngine || '').trim().toUpperCase();
+    const runtimeName = String(hostInfo?.browserRuntimeName || '').trim();
+    const coreName = String(hostInfo?.browserCoreName || '').trim();
+    const coreVersion = String(hostInfo?.browserCoreVersion || '').trim();
+    const browserVersionName = String(hostInfo?.browserVersionName || '').trim();
+    const webViewVersionName = String(hostInfo?.webViewVersionName || '').trim();
+    const webViewChromiumVersion = String(hostInfo?.webViewChromiumVersion || '').trim();
+    const browserCoreMajor = parsePositiveInteger(hostInfo?.browserCoreMajorVersion)
+        || parseMajorVersion(coreVersion)
+        || parseMajorVersion(browserVersionName);
+    const webViewMajor = parsePositiveInteger(hostInfo?.webViewChromiumMajorVersion)
+        || parseMajorVersion(webViewChromiumVersion)
+        || parseMajorVersion(webViewVersionName)
+        || parseChromeMajorFromUserAgent();
+    const isGeckoView = browserEngine === 'GECKOVIEW'
+        || /gecko/i.test(coreName)
+        || /geckoview/i.test(runtimeName);
+
+    return {
+        browserEngine,
+        runtimeName,
+        coreName,
+        coreVersion,
+        browserCoreMajor,
+        webViewMajor,
+        isGeckoView,
+    };
+}
+
 function resolveThemePerformanceProfile(settings, hostInfo = getHostVersionInfo()) {
+    const runtimeProfile = resolveBrowserRuntimeProfile(hostInfo);
+    const runtimeThemeFields = {
+        // GeckoView 模式下系统 WebView provider 只是旁路信息，不能作为当前页面 CSS/性能规则的 WebView 主版本。
+        webViewMajor: runtimeProfile.isGeckoView ? 0 : runtimeProfile.webViewMajor,
+        browserCoreMajor: runtimeProfile.browserCoreMajor,
+        browserCoreName: runtimeProfile.coreName,
+        browserEngine: runtimeProfile.browserEngine,
+    };
     const requestedMode = normalizeThemePerformanceMode(settings.themePerformanceMode);
     if (requestedMode === 'simple') {
         return {
             effectiveMode: 'simple',
             reason: '已手动使用简约模式，仅保留大面板毛玻璃，滚动项和小组件禁用实时模糊。',
+            ...runtimeThemeFields,
         };
     }
 
@@ -588,12 +648,13 @@ function resolveThemePerformanceProfile(settings, hostInfo = getHostVersionInfo(
         return {
             effectiveMode: 'quality',
             reason: '已手动使用高质量模式，保留完整毛玻璃效果。',
+            ...runtimeThemeFields,
         };
     }
 
     const webViewPackageName = String(hostInfo?.webViewPackageName || '').toLowerCase();
-    const webViewVersionName = String(hostInfo?.webViewVersionName || '');
-    const webViewMajor = parseMajorVersion(webViewVersionName) || parseChromeMajorFromUserAgent();
+    const webViewMajor = runtimeProfile.webViewMajor;
+    const browserCoreMajor = runtimeProfile.browserCoreMajor;
     const androidSdkInt = parsePositiveInteger(hostInfo?.androidSdkInt);
     const memoryClassMb = parsePositiveInteger(hostInfo?.appMemoryClassMb);
     const hardwareConcurrency = parsePositiveInteger(navigator.hardwareConcurrency);
@@ -602,11 +663,11 @@ function resolveThemePerformanceProfile(settings, hostInfo = getHostVersionInfo(
     const isHuaweiWebView = /huawei|honor/.test(webViewPackageName);
     const reasons = [];
 
-    if (isHuaweiWebView && webViewMajor > 0 && webViewMajor < huaweiWebViewSafeAutoMajorVersion) {
+    if (!runtimeProfile.isGeckoView && isHuaweiWebView && webViewMajor > 0 && webViewMajor < huaweiWebViewSafeAutoMajorVersion) {
         reasons.push(`Huawei WebView ${webViewMajor} 命中旧合成层保守规则`);
     }
 
-    if (webViewMajor > 0 && webViewMajor < webViewSafeAutoMajorVersion) {
+    if (!runtimeProfile.isGeckoView && webViewMajor > 0 && webViewMajor < webViewSafeAutoMajorVersion) {
         reasons.push(`WebView/Chrome ${webViewMajor} 低于自动高质量阈值 ${webViewSafeAutoMajorVersion}`);
     }
 
@@ -626,7 +687,7 @@ function resolveThemePerformanceProfile(settings, hostInfo = getHostVersionInfo(
         reasons.push(`CPU 线程数 ${hardwareConcurrency} 偏低`);
     }
 
-    if (!hasAndroidHostBridge && isAndroidHost && webViewMajor === 0) {
+    if (!hasAndroidHostBridge && isAndroidHost && !runtimeProfile.isGeckoView && webViewMajor === 0) {
         reasons.push('外部 Android 触屏浏览器无法读取 WebView 版本');
     }
 
@@ -634,15 +695,17 @@ function resolveThemePerformanceProfile(settings, hostInfo = getHostVersionInfo(
         return {
             effectiveMode: 'simple',
             reason: `自动判定为简约：${reasons.join('，')}。`,
-            webViewMajor,
+            ...runtimeThemeFields,
         };
     }
 
-    const providerText = webViewMajor > 0 ? `WebView/Chrome ${webViewMajor}` : '当前浏览器';
+    const providerText = runtimeProfile.isGeckoView
+        ? `GeckoView${browserCoreMajor > 0 ? ` ${browserCoreMajor}` : ''}`
+        : (webViewMajor > 0 ? `WebView/Chrome ${webViewMajor}` : '当前浏览器');
     return {
         effectiveMode: 'quality',
         reason: `自动判定为高质量：${providerText} 未命中旧 WebView / 低资源规则。`,
-        webViewMajor,
+        ...runtimeThemeFields,
     };
 }
 
@@ -678,10 +741,16 @@ function formatVersionSummary(info) {
     const hostVersion = String(info.hostVersion || 'unknown');
     const apkVersionName = String(info.apkVersionName || 'unknown');
     const apkVersionCode = String(info.apkVersionCode || 'unknown');
+    const browserRuntime = String(info.browserRuntimeName || '').trim();
+    const browserCore = String(info.browserCoreName || '').trim();
+    const browserCoreVersion = String(info.browserCoreVersion || '').trim();
     const webViewVersion = String(info.webViewVersionName || '').trim();
     const webViewPackage = String(info.webViewPackageName || '').trim();
+    const browserSummary = browserRuntime
+        ? ` | 浏览器 ${browserRuntime}${browserCore ? ` ${browserCore}` : ''}${browserCoreVersion ? ` ${browserCoreVersion}` : ''}`
+        : '';
     const webViewSummary = webViewVersion ? ` | WebView ${webViewVersion}${webViewPackage ? ` (${webViewPackage})` : ''}` : '';
-    return `宿主 ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})${webViewSummary}`;
+    return `宿主 ${hostVersion} | APK ${apkVersionName} (${apkVersionCode})${browserSummary}${webViewSummary}`;
 }
 
 function getHostVersionInfo() {
@@ -1092,6 +1161,9 @@ function applyThemeState() {
         delete html.dataset.sillydroidThemeEffectivePerformance;
         delete html.dataset.sillydroidThemePerformanceReason;
         delete html.dataset.sillydroidWebviewMajor;
+        delete html.dataset.sillydroidBrowserEngine;
+        delete html.dataset.sillydroidBrowserCore;
+        delete html.dataset.sillydroidBrowserCoreMajor;
         persistStartupThemeState(themeState);
         syncNativeSystemBarsFromThemeState(themeState);
         return;
@@ -1104,6 +1176,21 @@ function applyThemeState() {
     applyThemeDataset(themeState);
     persistStartupThemeState(themeState);
     syncNativeSystemBarsFromThemeState(themeState);
+}
+
+function bindHostVersionInfoRefresh() {
+    const html = document.documentElement;
+    if (!html || html.dataset.sillydroidHostVersionInfoBound) {
+        return;
+    }
+
+    html.dataset.sillydroidHostVersionInfoBound = 'true';
+    window.addEventListener('sillydroidHostVersionInfoChanged', () => {
+        // GeckoView 的 native messaging 是异步链路；首次渲染可能先拿到默认缓存，
+        // 宿主真实版本返回后必须刷新主题性能档和设置面板，避免按系统 WebView 信息误判。
+        applyThemeState();
+        syncSettingsPanel();
+    });
 }
 
 function setTheme(theme) {
@@ -2655,6 +2742,7 @@ async function ensureSettingsPanel() {
 
 async function init() {
     getExtensionSettings();
+    bindHostVersionInfoRefresh();
     syncMessageAlertListener();
     applyThemeState();
     observeAndroidMultipleSelect2();

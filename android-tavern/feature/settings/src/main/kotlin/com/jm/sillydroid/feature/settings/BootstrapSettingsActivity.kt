@@ -62,6 +62,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         private const val resultShouldStartKey = SettingsNavigationContract.resultShouldStartKey
         private const val resultShouldReloadTavernUiKey = SettingsNavigationContract.resultShouldReloadTavernUiKey
         private const val resultShouldForceFreshWebViewLoadKey = SettingsNavigationContract.resultShouldForceFreshWebViewLoadKey
+        private const val resultShouldRecreateMainActivityKey = SettingsNavigationContract.resultShouldRecreateMainActivityKey
         private const val resultBrowserDataClearMaskKey = SettingsNavigationContract.resultBrowserDataClearMaskKey
         private const val openExtensionsTabKey = SettingsNavigationContract.openExtensionsTabKey
         private const val openDefaultExtensionsInstallerKey = SettingsNavigationContract.openDefaultExtensionsInstallerKey
@@ -91,6 +92,10 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             return data?.getBooleanExtra(resultShouldForceFreshWebViewLoadKey, false) == true
         }
 
+        fun shouldRecreateMainActivity(data: Intent?): Boolean {
+            return data?.getBooleanExtra(resultShouldRecreateMainActivityKey, false) == true
+        }
+
         fun browserDataClearMask(data: Intent?): Int {
             return data?.getIntExtra(resultBrowserDataClearMaskKey, 0) ?: 0
         }
@@ -113,6 +118,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var backgroundOnlyModeSwitch: MaterialSwitch
     private lateinit var backgroundHealthCheckSwitch: MaterialSwitch
     private lateinit var pullRefreshSwitch: MaterialSwitch
+    private lateinit var browserEngineRow: View
+    private lateinit var browserEngineValueView: TextView
     private lateinit var displayModeRow: View
     private lateinit var displayModeValueView: TextView
     private lateinit var debugDiagnosticsSwitch: MaterialSwitch
@@ -345,6 +352,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         backgroundOnlyModeSwitch = findViewById(R.id.bootstrapSettingsBackgroundOnlyModeSwitch)
         backgroundHealthCheckSwitch = findViewById(R.id.bootstrapSettingsBackgroundHealthCheckSwitch)
         pullRefreshSwitch = findViewById(R.id.bootstrapSettingsPullRefreshSwitch)
+        browserEngineRow = findViewById(R.id.bootstrapSettingsBrowserEngineRow)
+        browserEngineValueView = findViewById(R.id.bootstrapSettingsBrowserEngineValue)
         displayModeRow = findViewById(R.id.bootstrapSettingsDisplayModeRow)
         displayModeValueView = findViewById(R.id.bootstrapSettingsDisplayModeValue)
         debugDiagnosticsSwitch = findViewById(R.id.bootstrapSettingsDebugDiagnosticsSwitch)
@@ -425,6 +434,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
+            browserEngineRow = browserEngineRow,
             hostDisplayModeRow = displayModeRow,
             unrestrictedFileImportSelectionSwitch = unrestrictedFileImportSelectionSwitch,
             restoreDefaultsButton = restoreDefaultsButton,
@@ -473,6 +483,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
+            browserEngineRow = browserEngineRow,
+            browserEngineValueView = browserEngineValueView,
             hostDisplayModeRow = displayModeRow,
             hostDisplayModeValueView = displayModeValueView,
             debugDiagnosticsSwitch = debugDiagnosticsSwitch,
@@ -615,19 +627,26 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         shouldStartBootstrap: Boolean = false,
         shouldReloadTavernUi: Boolean = false,
         shouldForceFreshWebViewLoad: Boolean = false,
+        shouldRecreateMainActivity: Boolean = false,
         browserDataClearMask: Int = 0
     ) {
         settingsActivityViewModel.markResultFlags(
             shouldStartBootstrap = shouldStartBootstrap,
             shouldReloadTavernUi = shouldReloadTavernUi,
             shouldForceFreshWebViewLoad = shouldForceFreshWebViewLoad,
+            shouldRecreateMainActivity = shouldRecreateMainActivity,
             browserDataClearMask = browserDataClearMask
         )
         renderResultFlags(settingsActivityViewModel.uiState.value)
     }
 
     private fun renderResultFlags(state: SettingsActivityUiState) {
-        if (!state.shouldStartBootstrap && !state.shouldReloadTavernUi && !state.shouldForceFreshWebViewLoad) {
+        if (
+            !state.shouldStartBootstrap &&
+            !state.shouldReloadTavernUi &&
+            !state.shouldForceFreshWebViewLoad &&
+            !state.shouldRecreateMainActivity
+        ) {
             return
         }
 
@@ -637,6 +656,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
                 .putExtra(resultShouldStartKey, state.shouldStartBootstrap)
                 .putExtra(resultShouldReloadTavernUiKey, state.shouldReloadTavernUi)
                 .putExtra(resultShouldForceFreshWebViewLoadKey, state.shouldForceFreshWebViewLoad)
+                .putExtra(resultShouldRecreateMainActivityKey, state.shouldRecreateMainActivity)
                 .putExtra(resultBrowserDataClearMaskKey, state.browserDataClearMask)
         )
     }

@@ -3,28 +3,37 @@ package com.jm.sillydroid.feature.main.ui.home.io
 import android.Manifest
 import android.app.Activity
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.jm.sillydroid.core.common.DispatcherProvider
 import com.jm.sillydroid.domain.notification.HostNotificationService
 import com.jm.sillydroid.domain.notification.HostDownloadNotificationCoordinator
 import com.jm.sillydroid.domain.bootstrap.RuntimeConfigRepository
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
 import com.jm.sillydroid.feature.main.R
+import com.jm.sillydroid.feature.main.diagnostics.normalizeDiagnosticValue
 import com.jm.sillydroid.feature.main.model.download.BrowserDownloadRequest
+import com.jm.sillydroid.feature.main.model.download.BrowserResponseDownloadRequest
 import com.jm.sillydroid.feature.main.model.download.BrowserDownloadResult
 import com.jm.sillydroid.feature.main.model.download.DownloadFailureReport
+import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeNames
 import com.jm.sillydroid.feature.main.ui.home.download.BlobDownloadController
 import com.jm.sillydroid.feature.main.ui.home.download.BrowserDownloadController
 import com.jm.sillydroid.feature.main.ui.home.notification.SystemNotificationController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 把宿主侧 IO 相关的 launcher 与 controller 全部抽出来：
@@ -41,18 +50,39 @@ class HostIoController(
     private val hostPreferencesRepository: HostPreferencesRepository,
     private val hostNotificationService: HostNotificationService,
     private val hostDownloadNotificationCoordinator: HostDownloadNotificationCoordinator,
-    private val blobDownloadBridgeName: String,
+    private val scope: CoroutineScope,
+    private val dispatchers: DispatcherProvider,
+    private val blobDownloadBridgeName: String = BrowserHostBridgeNames.DEFAULT_BLOB_DOWNLOAD_BRIDGE_NAME,
     private val downloadDiagnosticSink: (String) -> Unit = {},
+    private val hostDiagnosticSink: (category: String, body: String) -> Unit = { _, _ -> },
 ) {
+    data class BrowserFileChooserRequest(
+        val intent: Intent,
+        val acceptTypes: Array<String>,
+        val allowMultiple: Boolean,
+        val forceAcceptTokenSelectionFilter: Boolean = false
+    )
+
     private data class FileChooserLaunchRequest(
         val intent: Intent,
         val selectionFilter: ((Uri) -> Boolean)? = null
+    )
+
+    private data class FileChooserResolvedResult(
+        val uris: Array<Uri>?,
+        val rawCount: Int,
+        val acceptedCount: Int,
+        val rejectedByFilter: Boolean
     )
 
     private val downloadManager by lazy { activity.getSystemService(DownloadManager::class.java) }
 
     private fun recordDownloadDiagnostic(body: String) {
         runCatching { downloadDiagnosticSink(body) }
+    }
+
+    private fun recordFileChooserDiagnostic(body: String) {
+        runCatching { hostDiagnosticSink("file_chooser", body) }
     }
 
     val browserDownloadController: BrowserDownloadController by lazy {
@@ -66,7 +96,12 @@ class HostIoController(
     }
 
     val blobDownloadController: BlobDownloadController by lazy {
-        BlobDownloadController(activity.contentResolver)
+        BlobDownloadController(
+            contentResolver = activity.contentResolver,
+            // GeckoView 的 native messaging 不适合承载超大 base64 单包；blob/data 导出先分块落在宿主 cache，
+            // 完成后再流式写入系统下载目录，避免导出大文件时挤爆 Java heap 或消息序列化上限。
+            chunkTempDirectory = java.io.File(activity.cacheDir, "blob-download-chunks")
+        )
     }
 
     val systemNotificationController: SystemNotificationController by lazy {
@@ -81,16 +116,25 @@ class HostIoController(
         ActivityResultContracts.RequestPermission()
     ) { /* no-op；用户授权与否都由后续真实通知时再决定 */ }
 
-    private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingFileChooserCallback: ((Array<Uri>?) -> Unit)? = null
     private var pendingFileChooserSelectionFilter: ((Uri) -> Boolean)? = null
+    private var pendingFileChooserSource: String = ""
     private val fileChooserLauncher = activity.registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val callback = pendingFileChooserCallback ?: return@registerForActivityResult
+        val source = pendingFileChooserSource.ifBlank { "unknown" }
         pendingFileChooserCallback = null
         val selectionFilter = pendingFileChooserSelectionFilter
         pendingFileChooserSelectionFilter = null
-        callback.onReceiveValue(resolveFileChooserUris(result.resultCode, result.data, selectionFilter))
+        pendingFileChooserSource = ""
+        val resolvedResult = resolveFileChooserResult(result.resultCode, result.data, selectionFilter)
+        recordFileChooserDiagnostic(
+            "event=file_chooser_result source=$source resultCode=${result.resultCode} " +
+                "rawCount=${resolvedResult.rawCount} acceptedCount=${resolvedResult.acceptedCount} " +
+                "rejectedByFilter=${resolvedResult.rejectedByFilter}"
+        )
+        callback.invoke(resolvedResult.uris)
     }
 
     fun ensureNotificationChannel() {
@@ -108,17 +152,86 @@ class HostIoController(
     }
 
     fun launchFileChooser(fileChooserParams: WebChromeClient.FileChooserParams, callback: ValueCallback<Array<Uri>>) {
-        val launchRequest = buildFileChooserLaunchRequest(fileChooserParams)
-        pendingFileChooserCallback?.onReceiveValue(null)
+        val request = BrowserFileChooserRequest(
+            intent = fileChooserParams.createIntent(),
+            acceptTypes = fileChooserParams.acceptTypes,
+            allowMultiple = fileChooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE
+        )
+        launchBrowserFileChooser(
+            source = "webview",
+            request = request,
+            callback = { uris -> callback.onReceiveValue(uris) }
+        )
+    }
+
+    fun launchFileChooser(request: BrowserFileChooserRequest, callback: (Array<Uri>?) -> Unit) {
+        launchBrowserFileChooser(
+            source = "geckoview",
+            request = request,
+            callback = callback
+        )
+    }
+
+    private fun launchBrowserFileChooser(
+        source: String,
+        request: BrowserFileChooserRequest,
+        callback: (Array<Uri>?) -> Unit
+    ) {
+        val launchRequest = runCatching { buildFileChooserLaunchRequest(request) }
+            .onFailure { error ->
+                recordFileChooserDiagnostic(
+                    "event=file_chooser_prepare_failed source=$source error=${error.javaClass.simpleName} " +
+                        "message=${normalizeDiagnosticValue(error.message)} acceptTypes=${request.acceptTypes.joinToString(separator = ",").ifBlank { "-" }}"
+                )
+                callback.invoke(null)
+            }
+            .getOrNull() ?: return
+        pendingFileChooserCallback?.invoke(null)
         pendingFileChooserCallback = callback
         pendingFileChooserSelectionFilter = launchRequest.selectionFilter
-        fileChooserLauncher.launch(launchRequest.intent)
+        pendingFileChooserSource = source
+        recordFileChooserDiagnostic(
+            "event=file_chooser_launch_requested source=$source action=${normalizeDiagnosticValue(launchRequest.intent.action)} " +
+                "type=${normalizeDiagnosticValue(launchRequest.intent.type)} allowMultiple=${request.allowMultiple} " +
+                "selectionFilter=${launchRequest.selectionFilter != null} acceptTypes=${request.acceptTypes.joinToString(separator = ",").ifBlank { "-" }}"
+        )
+        try {
+            fileChooserLauncher.launch(launchRequest.intent)
+        } catch (error: ActivityNotFoundException) {
+            failPendingFileChooserLaunch(source = source, error = error, callback = callback)
+        } catch (error: IllegalStateException) {
+            failPendingFileChooserLaunch(source = source, error = error, callback = callback)
+        } catch (error: SecurityException) {
+            failPendingFileChooserLaunch(source = source, error = error, callback = callback)
+        }
     }
 
     fun cancelPendingFileChooser() {
-        pendingFileChooserCallback?.onReceiveValue(null)
+        if (pendingFileChooserCallback != null) {
+            recordFileChooserDiagnostic(
+                "event=file_chooser_cancel_pending source=${pendingFileChooserSource.ifBlank { "unknown" }}"
+            )
+        }
+        pendingFileChooserCallback?.invoke(null)
         pendingFileChooserCallback = null
         pendingFileChooserSelectionFilter = null
+        pendingFileChooserSource = ""
+    }
+
+    private fun failPendingFileChooserLaunch(
+        source: String,
+        error: Exception,
+        callback: (Array<Uri>?) -> Unit
+    ) {
+        pendingFileChooserCallback = null
+        pendingFileChooserSelectionFilter = null
+        pendingFileChooserSource = ""
+        recordFileChooserDiagnostic(
+            "event=file_chooser_launch_failed source=$source error=${error.javaClass.simpleName} " +
+                "message=${normalizeDiagnosticValue(error.message)}"
+        )
+        Toast.makeText(activity, R.string.file_chooser_open_failed, Toast.LENGTH_LONG).show()
+        callback.invoke(null)
     }
 
     @Suppress("DEPRECATION")
@@ -167,6 +280,63 @@ class HostIoController(
         }
     }
 
+    @Suppress("DEPRECATION")
+    fun handleBrowserResponseDownload(request: BrowserResponseDownloadRequest) {
+        val rawFileName = URLUtil.guessFileName(request.url, request.contentDisposition, request.mimeType)
+        val fileName = blobDownloadController.resolveFileName(rawFileName)
+        val mimeType = request.mimeType.ifBlank { "application/octet-stream" }
+        // GeckoView 已经把下载响应体交给宿主；这里直接落 MediaStore，避免 DownloadManager 再用裸 URL 重拉导致 Cookie/会话丢失。
+        recordDownloadDiagnostic(
+            "event=handle_response_download_started fileName=$fileName url=${request.url} mime=$mimeType " +
+                "contentDisposition=${request.contentDisposition.ifBlank { "-" }}"
+        )
+        Toast.makeText(
+            activity,
+            activity.getString(R.string.download_status_saving, fileName),
+            Toast.LENGTH_SHORT
+        ).show()
+
+        scope.launch {
+            val result = runCatching {
+                withContext(dispatchers.io) {
+                    blobDownloadController.persistStream(
+                        rawFileName = rawFileName,
+                        fallbackUrl = request.url,
+                        mimeType = mimeType,
+                        inputStream = request.body
+                    )
+                }
+            }
+            result.onSuccess { savedFile ->
+                hostDownloadNotificationCoordinator.postBrowserDownloadSaved(
+                    fileName = savedFile.fileName,
+                    mimeType = savedFile.mimeType,
+                    contentUri = savedFile.contentUri,
+                    displayPath = savedFile.displayPath
+                )
+                recordDownloadDiagnostic(
+                    "event=handle_response_download_saved fileName=${savedFile.fileName} uri=${savedFile.contentUri}"
+                )
+                Toast.makeText(
+                    activity,
+                    activity.getString(R.string.download_saved, savedFile.fileName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { error ->
+                val message = error.message ?: activity.getString(R.string.download_failed_unknown)
+                recordDownloadDiagnostic(
+                    "event=handle_response_download_failed fileName=$fileName error=$message"
+                )
+                showDownloadFailure(
+                    DownloadFailureReport(
+                        fileName = fileName,
+                        message = message
+                    )
+                )
+            }
+        }
+    }
+
     private fun maybeHandleBlobDownload(request: BrowserDownloadRequest): Boolean {
         val scheme = Uri.parse(request.url).scheme.orEmpty()
         if (!scheme.equals("blob", ignoreCase = true) && !scheme.equals("data", ignoreCase = true)) {
@@ -178,8 +348,15 @@ class HostIoController(
         recordDownloadDiagnostic(
             "event=handle_page_download_delegate_blob_capture scheme=$scheme url=${request.url}"
         )
+        val sourceWebView = request.sourceWebView
+        if (sourceWebView == null) {
+            recordDownloadDiagnostic(
+                "event=handle_page_download_delegate_blob_capture_skipped reason=missing_source_webview scheme=$scheme url=${request.url}"
+            )
+            return false
+        }
         blobDownloadController.captureFromDownloadListener(
-            webView = request.sourceWebView,
+            webView = sourceWebView,
             bridgeName = blobDownloadBridgeName,
             request = request,
             diagnosticSink = ::recordDownloadDiagnostic
@@ -199,14 +376,24 @@ class HostIoController(
         return activity.getString(R.string.download_failed, report.fileName, details)
     }
 
-    private fun buildFileChooserLaunchRequest(fileChooserParams: WebChromeClient.FileChooserParams): FileChooserLaunchRequest {
-        val chooserIntent = fileChooserParams.createIntent()
-        val acceptTokens = fileChooserParams.acceptTypes
-            .asSequence()
-            .flatMap { acceptValue -> acceptValue.split(',').asSequence() }
-            .map { acceptToken -> acceptToken.trim() }
-            .filter { acceptToken -> acceptToken.isNotEmpty() }
-            .toList()
+    private fun buildFileChooserLaunchRequest(request: BrowserFileChooserRequest): FileChooserLaunchRequest {
+        val chooserIntent = request.intent
+        chooserIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, request.allowMultiple)
+        val acceptTokens = BrowserFileChooserSelectionPolicy.normalizeAcceptTokens(request.acceptTypes)
+        if (BrowserFileChooserSelectionPolicy.shouldForceSelectionFilter(
+                acceptTokens = acceptTokens,
+                forceAcceptTokenSelectionFilter = request.forceAcceptTokenSelectionFilter
+            )
+        ) {
+            // GeckoView 只把 MIME 交给 Android chooser 会丢掉 .json/.charx 等扩展过滤；
+            // 因此先放开系统选择器，再按网页原始 accept token 做选后校验，避免合法导入文件被置灰。
+            applyAnyFileTypeToFileChooserIntent(chooserIntent)
+            return FileChooserLaunchRequest(
+                intent = chooserIntent,
+                selectionFilter = buildAcceptTokenSelectionFilter(acceptTokens)
+            )
+        }
+
         if (acceptTokens.none { acceptToken -> acceptToken.equals(".jsonl", ignoreCase = true) }) {
             return FileChooserLaunchRequest(intent = chooserIntent)
         }
@@ -224,7 +411,7 @@ class HostIoController(
         applyAnyFileTypeToFileChooserIntent(chooserIntent)
         return FileChooserLaunchRequest(
             intent = chooserIntent,
-            selectionFilter = buildJsonlAwareSelectionFilter(acceptTokens)
+            selectionFilter = buildAcceptTokenSelectionFilter(acceptTokens)
         )
     }
 
@@ -284,34 +471,16 @@ class HostIoController(
         return intent
     }
 
-    private fun buildJsonlAwareSelectionFilter(acceptTokens: List<String>): (Uri) -> Boolean {
+    private fun buildAcceptTokenSelectionFilter(acceptTokens: List<String>): (Uri) -> Boolean {
         val normalizedAcceptTokens = acceptTokens.map { acceptToken -> acceptToken.trim() }.filter { acceptToken -> acceptToken.isNotEmpty() }
-        val jsonlMimeAliases = setOf(
-            "application/x-ndjson",
-            "application/jsonl",
-            "application/json",
-            "text/plain"
-        )
         return selectionFilter@{ uri ->
             val displayName = resolveDisplayName(uri)
             val mimeType = activity.contentResolver.getType(uri)?.trim().orEmpty()
-            normalizedAcceptTokens.any { acceptToken ->
-                when {
-                    acceptToken.equals(".jsonl", ignoreCase = true) -> {
-                        displayName?.endsWith(".jsonl", ignoreCase = true) == true ||
-                            mimeType in jsonlMimeAliases
-                    }
-
-                    acceptToken.startsWith(".") -> displayName?.endsWith(acceptToken, ignoreCase = true) == true
-                    acceptToken.endsWith("/*") -> {
-                        val mimePrefix = acceptToken.removeSuffix("*")
-                        mimeType.startsWith(mimePrefix, ignoreCase = true)
-                    }
-
-                    acceptToken.contains('/') -> mimeType.equals(acceptToken, ignoreCase = true)
-                    else -> false
-                }
-            }
+            BrowserFileChooserSelectionPolicy.accepts(
+                acceptTokens = normalizedAcceptTokens,
+                displayName = displayName,
+                mimeType = mimeType
+            )
         }
     }
 
@@ -332,13 +501,18 @@ class HostIoController(
         } ?: uri.lastPathSegment?.substringAfterLast('/')?.trim()?.takeIf { name -> name.isNotEmpty() }
     }
 
-    private fun resolveFileChooserUris(
+    private fun resolveFileChooserResult(
         resultCode: Int,
         data: Intent?,
         selectionFilter: ((Uri) -> Boolean)?
-    ): Array<Uri>? {
+    ): FileChooserResolvedResult {
         if (resultCode != Activity.RESULT_OK) {
-            return null
+            return FileChooserResolvedResult(
+                uris = null,
+                rawCount = 0,
+                acceptedCount = 0,
+                rejectedByFilter = false
+            )
         }
         val selectedUris = mutableListOf<Uri>()
         val clipData = data?.clipData
@@ -350,12 +524,27 @@ class HostIoController(
             data?.data?.let(selectedUris::add)
         }
         if (selectedUris.isEmpty()) {
-            return emptyArray()
+            return FileChooserResolvedResult(
+                uris = emptyArray(),
+                rawCount = 0,
+                acceptedCount = 0,
+                rejectedByFilter = false
+            )
         }
         val acceptedUris = selectionFilter?.let { filter -> selectedUris.filter(filter) } ?: selectedUris
         if (acceptedUris.isEmpty()) {
-            return null
+            return FileChooserResolvedResult(
+                uris = null,
+                rawCount = selectedUris.size,
+                acceptedCount = 0,
+                rejectedByFilter = selectionFilter != null
+            )
         }
-        return acceptedUris.toTypedArray()
+        return FileChooserResolvedResult(
+            uris = acceptedUris.toTypedArray(),
+            rawCount = selectedUris.size,
+            acceptedCount = acceptedUris.size,
+            rejectedByFilter = selectionFilter != null && acceptedUris.size < selectedUris.size
+        )
     }
 }
