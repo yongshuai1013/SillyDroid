@@ -28,5 +28,4 @@ android-tavern/app/signing/release.keystore
 android-tavern/app/signing/release-signing.properties
 AGENTS.md
 classes.jar
-agent_memory/
 .agent_memory/
