@@ -25,6 +25,7 @@ import com.jm.sillydroid.core.model.settings.TavernConfigSectionSpec
 import com.jm.sillydroid.domain.settings.SettingsConfigRepository
 import com.jm.sillydroid.feature.settings.R
 import com.jm.sillydroid.feature.settings.model.BootstrapSettingsValidationIssue
+import com.jm.sillydroid.feature.settings.ui.applySettingsEndIconStyle
 import com.jm.sillydroid.feature.settings.ui.createSettingsEditText
 import com.jm.sillydroid.feature.settings.ui.createSettingsTextInputLayout
 import com.google.android.material.card.MaterialCardView
@@ -595,6 +596,7 @@ class BootstrapSettingsFormController(
             setEndIconDrawable(R.drawable.ic_port_random)
             setEndIconContentDescription(R.string.bootstrap_settings_port_randomize)
             isEndIconVisible = enabled
+            applySettingsEndIconStyle()
         }
 
         val editText = inputLayout.createSettingsEditText().apply {

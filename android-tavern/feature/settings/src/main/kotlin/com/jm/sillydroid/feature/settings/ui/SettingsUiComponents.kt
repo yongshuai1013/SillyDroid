@@ -1,8 +1,10 @@
 package com.jm.sillydroid.feature.settings.ui
 
 import android.content.res.ColorStateList
+import android.util.TypedValue
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.view.ViewGroup
 import androidx.annotation.AttrRes
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -92,6 +94,33 @@ internal fun AppCompatActivity.createSettingsTextInputLayout(
 
 internal fun TextInputLayout.createSettingsEditText(): TextInputEditText {
     return TextInputEditText(context, null, android.R.attr.editTextStyle)
+}
+
+internal fun TextInputLayout.applySettingsEndIconStyle() {
+    val button = findViewById<ImageButton>(com.google.android.material.R.id.text_input_end_icon) ?: return
+    val size = resources.getDimensionPixelSize(R.dimen.sillydroid_settings_input_trailing_button_size)
+    val padding = resources.getDimensionPixelSize(R.dimen.sillydroid_settings_input_trailing_button_padding)
+    val marginEndPx = resources.getDimensionPixelSize(R.dimen.sillydroid_settings_input_trailing_button_margin_end)
+    val selectableItemBackground = TypedValue().also { typedValue ->
+        context.theme.resolveAttribute(android.R.attr.selectableItemBackground, typedValue, true)
+    }.resourceId
+    val ripple = AppCompatResources.getDrawable(context, selectableItemBackground)
+
+    // Material 默认 end icon 会贴着 TextInputLayout 右边界，borderless ripple 还会跑出输入框描边。
+    // 设置页的输入框尾部动作统一收在描边内部，并保留可点击触控区。
+    button.minimumWidth = 0
+    button.minimumHeight = 0
+    button.setPadding(padding, padding, padding, padding)
+    button.scaleType = ImageView.ScaleType.CENTER_INSIDE
+    button.background = ripple
+    val params = (button.layoutParams as? ViewGroup.MarginLayoutParams)?.apply {
+        width = size
+        height = size
+        rightMargin = marginEndPx
+    } ?: ViewGroup.MarginLayoutParams(size, size).apply {
+        rightMargin = marginEndPx
+    }
+    button.layoutParams = params
 }
 
 internal fun AppCompatActivity.resolveThemeResource(@AttrRes attrRes: Int): Int {

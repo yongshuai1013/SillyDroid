@@ -15,7 +15,6 @@ import androidx.core.view.isVisible
 import com.google.android.material.R as MaterialR
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
-import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -275,42 +274,107 @@ class RuntimePatchBottomSheetController(
             Toast.makeText(activity, R.string.bootstrap_settings_host_runtime_patch_settings_empty, Toast.LENGTH_SHORT).show()
             return
         }
-        val content = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                dimen(R.dimen.sillydroid_dialog_content_padding_horizontal),
-                dimen(R.dimen.sillydroid_space_md),
-                dimen(R.dimen.sillydroid_dialog_content_padding_horizontal),
-                0
-            )
+        var dialog: androidx.appcompat.app.AlertDialog? = null
+        val content = createSettingsDialogRoot().apply {
+            addView(createDialogTitleRow(moduleDisplayTitle(module)) { dialog?.dismiss() })
+            module.description.takeIf { description -> description.isNotBlank() }?.let { description ->
+                addView(createDialogSummary(description))
+            }
+            addView(createDialogSummary(activity.getString(R.string.bootstrap_settings_host_runtime_patch_restart_hint)).apply {
+                setTextColor(resolveColor(MaterialR.attr.colorPrimary))
+            })
+            val settingsContainer = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dimen(R.dimen.sillydroid_space_sm), 0, 0)
+            }
+            module.settings.forEachIndexed { index, setting ->
+                settingsContainer.addView(createSettingRow(module, setting, onSettingsChanged).apply {
+                    if (index > 0) {
+                        layoutParams = (layoutParams as LinearLayout.LayoutParams).apply {
+                            topMargin = dimen(R.dimen.sillydroid_space_md)
+                        }
+                    }
+                })
+            }
+            addView(settingsContainer)
         }
-        module.settings.forEach { setting ->
-            content.addView(createSettingRow(module, setting, onSettingsChanged))
-        }
-        MaterialAlertDialogBuilder(activity)
-            .setTitle(moduleDisplayTitle(module))
+        dialog = MaterialAlertDialogBuilder(activity)
             .setView(
                 ScrollView(activity).apply {
                     addView(content)
                 }
             )
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .create()
+        dialog.show()
+    }
+
+    private fun createSettingsDialogRoot(): LinearLayout {
+        return LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(
+                dimen(R.dimen.sillydroid_dialog_content_padding_horizontal),
+                dimen(R.dimen.sillydroid_dialog_content_padding_vertical),
+                dimen(R.dimen.sillydroid_dialog_content_padding_horizontal),
+                dimen(R.dimen.sillydroid_dialog_content_padding_vertical)
+            )
+        }
+    }
+
+    private fun createDialogTitleRow(title: String, onClose: () -> Unit): LinearLayout {
+        return LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                TextView(activity).apply {
+                    setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsSectionTitle)
+                    text = title
+                    setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+            )
+            addView(
+                activity.createSettingsDenseIconButton(
+                    iconResId = R.drawable.ic_close,
+                    contentDescriptionResId = R.string.bootstrap_settings_host_runtime_patch_close,
+                    onClick = onClose
+                )
+            )
+        }
+    }
+
+    private fun createDialogSummary(textValue: String): TextView {
+        return TextView(activity).apply {
+            setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsBody)
+            text = textValue
+            setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
+            setPadding(0, dimen(R.dimen.sillydroid_space_sm), 0, 0)
+        }
     }
 
     private fun createSettingRow(
         module: RuntimePatchModuleMetadataSnapshot,
         setting: RuntimePatchSettingMetadataSnapshot,
         onSettingChanged: () -> Unit
-    ): LinearLayout {
+    ): MaterialCardView {
         val normalizedType = RuntimePatchSettingTypes.normalize(setting.type)
-        val row = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val card = MaterialCardView(activity, null, MaterialR.attr.materialCardViewStyle).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
             isClickable = true
             isFocusable = true
             foreground = selectableItemBackground()
-            setPadding(0, dimen(R.dimen.sillydroid_space_sm), 0, dimen(R.dimen.sillydroid_space_sm))
+        }
+        val row = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(
+                dimen(R.dimen.sillydroid_panel_padding),
+                dimen(R.dimen.sillydroid_panel_padding),
+                dimen(R.dimen.sillydroid_panel_padding),
+                dimen(R.dimen.sillydroid_panel_padding)
+            )
         }
         val textColumn = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -318,11 +382,10 @@ class RuntimePatchBottomSheetController(
         }
         val currentValue = viewModel.resolveRuntimePatchSettingValue(module.id, setting.key, setting.defaultValue)
         textColumn.addView(createSettingTitle(setting))
-        if (setting.description.isNotBlank()) {
-            textColumn.addView(createMetaText(setting.description))
+        userFacingPatchText(setting.description).takeIf { description -> description.isNotBlank() }?.let { description ->
+            textColumn.addView(createSettingDescription(description))
         }
-        val settingMetaView = createMetaText(createSettingMeta(setting, currentValue))
-        textColumn.addView(settingMetaView)
+        val settingValueView = createSettingCurrentValue(setting, currentValue)
         row.addView(textColumn)
 
         when (normalizedType) {
@@ -338,13 +401,13 @@ class RuntimePatchBottomSheetController(
                 }
                 toggle.setOnClickListener {
                     updateSetting(module.id, setting, toggle.isChecked.toString())
-                    settingMetaView.text = createSettingMeta(setting, toggle.isChecked.toString())
+                    settingValueView.text = currentValueLabel(setting, toggle.isChecked.toString())
                     onSettingChanged()
                 }
-                row.setOnClickListener {
+                card.setOnClickListener {
                     toggle.isChecked = !toggle.isChecked
                     updateSetting(module.id, setting, toggle.isChecked.toString())
-                    settingMetaView.text = createSettingMeta(setting, toggle.isChecked.toString())
+                    settingValueView.text = currentValueLabel(setting, toggle.isChecked.toString())
                     onSettingChanged()
                 }
                 row.addView(toggle)
@@ -361,69 +424,81 @@ class RuntimePatchBottomSheetController(
                 }
                 checkbox.setOnClickListener {
                     updateSetting(module.id, setting, checkbox.isChecked.toString())
-                    settingMetaView.text = createSettingMeta(setting, checkbox.isChecked.toString())
+                    settingValueView.text = currentValueLabel(setting, checkbox.isChecked.toString())
                     onSettingChanged()
                 }
-                row.setOnClickListener {
+                card.setOnClickListener {
                     checkbox.isChecked = !checkbox.isChecked
                     updateSetting(module.id, setting, checkbox.isChecked.toString())
-                    settingMetaView.text = createSettingMeta(setting, checkbox.isChecked.toString())
+                    settingValueView.text = currentValueLabel(setting, checkbox.isChecked.toString())
                     onSettingChanged()
                 }
                 row.addView(checkbox)
             }
             else -> {
-                val valueView = TextView(activity).apply {
-                    setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsMeta)
-                    text = resolveDisplayValue(setting, currentValue)
-                    setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        leftMargin = dimen(R.dimen.sillydroid_space_md)
-                    }
+                settingValueView.layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    leftMargin = dimen(R.dimen.sillydroid_space_md)
                 }
-                row.setOnClickListener {
+                card.setOnClickListener {
                     val latestValue = viewModel.resolveRuntimePatchSettingValue(module.id, setting.key, setting.defaultValue)
                     showSettingEditor(module.id, setting, latestValue) { nextValue ->
-                        valueView.text = resolveDisplayValue(setting, nextValue)
-                        settingMetaView.text = createSettingMeta(setting, nextValue)
+                        settingValueView.text = currentValueLabel(setting, nextValue)
                         onSettingChanged()
                     }
                 }
-                row.addView(valueView)
+                row.addView(settingValueView)
             }
         }
 
-        return row
+        card.addView(row)
+        return card
     }
 
     private fun createSettingTitle(setting: RuntimePatchSettingMetadataSnapshot): TextView {
         return TextView(activity).apply {
-            setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsBody)
+            setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsCardTitle)
             text = setting.title.ifBlank { setting.key }
             setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
         }
     }
 
-    private fun createSettingMeta(setting: RuntimePatchSettingMetadataSnapshot, currentValue: String): String {
-        return buildString {
-            append("key=")
-            append(setting.key)
-            append(" · type=")
-            append(setting.type.ifBlank { "text" })
-            if (setting.version.isNotBlank()) {
-                append(" · settingVersion=")
-                append(setting.version)
-            }
-            if (setting.unit.isNotBlank()) {
-                append(" · unit=")
-                append(setting.unit)
-            }
-            append(" · current=")
-            append(resolveDisplayValue(setting, currentValue))
+    private fun createSettingDescription(description: String): TextView {
+        return TextView(activity).apply {
+            setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsBody)
+            text = description
+            setTextColor(resolveColor(MaterialR.attr.colorOnSurfaceVariant))
+            setPadding(0, dimen(R.dimen.sillydroid_space_xs), 0, 0)
         }
+    }
+
+    private fun createSettingCurrentValue(
+        setting: RuntimePatchSettingMetadataSnapshot,
+        currentValue: String
+    ): TextView {
+        return TextView(activity).apply {
+            setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsButton)
+            text = currentValueLabel(setting, currentValue)
+            setTextColor(resolveColor(MaterialR.attr.colorPrimary))
+            gravity = Gravity.CENTER
+            maxLines = 1
+        }
+    }
+
+    private fun currentValueLabel(setting: RuntimePatchSettingMetadataSnapshot, value: String): String {
+        return activity.getString(
+            R.string.bootstrap_settings_host_runtime_patch_current_value,
+            resolveDisplayValue(setting, value)
+        )
+    }
+
+    private fun createSettingPickerTitle(setting: RuntimePatchSettingMetadataSnapshot): String {
+        return activity.getString(
+            R.string.bootstrap_settings_host_runtime_patch_picker_title,
+            setting.title.ifBlank { setting.key }
+        )
     }
 
     private fun showSettingEditor(
@@ -446,27 +521,113 @@ class RuntimePatchBottomSheetController(
         currentValue: String,
         onDisplayValueChanged: (String) -> Unit
     ) {
-        val options = setting.options
-        val optionLabels = options.map { option ->
-            if (option.description.isBlank()) {
-                option.label
-            } else {
-                "${option.label}\n${option.description}"
+        var dialog: androidx.appcompat.app.AlertDialog? = null
+        val content = createSettingsDialogRoot().apply {
+            addView(createDialogTitleRow(createSettingPickerTitle(setting)) { dialog?.dismiss() })
+            userFacingPatchText(setting.description).takeIf { description -> description.isNotBlank() }?.let { description ->
+                addView(createDialogSummary(description))
             }
-        }.toTypedArray()
-        val values = options.map { option -> option.value }
-        val checkedItem = values.indexOf(currentValue).takeIf { index -> index >= 0 }
-            ?: values.indexOf(setting.defaultValue).coerceAtLeast(0)
-        MaterialAlertDialogBuilder(activity)
-            .setTitle(setting.title.ifBlank { setting.key })
-            .setSingleChoiceItems(optionLabels, checkedItem) { dialog, which ->
-                val nextValue = values.getOrNull(which).orEmpty()
-                updateSetting(moduleId, setting, nextValue)
-                onDisplayValueChanged(nextValue)
-                dialog.dismiss()
+            val optionsContainer = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dimen(R.dimen.sillydroid_space_sm), 0, 0)
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            setting.options.forEachIndexed { index, option ->
+                val selected = option.value == currentValue
+                optionsContainer.addView(
+                    createOptionCard(
+                        label = option.label,
+                        description = userFacingPatchText(option.description),
+                        selected = selected,
+                        onClick = {
+                            updateSetting(moduleId, setting, option.value)
+                            onDisplayValueChanged(option.value)
+                            dialog?.dismiss()
+                        }
+                    ).apply {
+                        if (index > 0) {
+                            layoutParams = (layoutParams as LinearLayout.LayoutParams).apply {
+                                topMargin = dimen(R.dimen.sillydroid_space_md)
+                            }
+                        }
+                    }
+                )
+            }
+            addView(optionsContainer)
+        }
+        dialog = MaterialAlertDialogBuilder(activity)
+            .setView(
+                ScrollView(activity).apply {
+                    addView(content)
+                }
+            )
+            .create()
+        dialog.show()
+    }
+
+    private fun createOptionCard(
+        label: String,
+        description: String,
+        selected: Boolean,
+        onClick: () -> Unit
+    ): MaterialCardView {
+        return MaterialCardView(activity, null, MaterialR.attr.materialCardViewStyle).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            if (selected) {
+                setCardBackgroundColor(resolveColor(MaterialR.attr.colorPrimaryContainer))
+                strokeColor = resolveColor(MaterialR.attr.colorPrimary)
+            }
+            isClickable = true
+            isFocusable = true
+            foreground = selectableItemBackground()
+            setOnClickListener { onClick() }
+            addView(
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(
+                        dimen(R.dimen.sillydroid_panel_padding),
+                        dimen(R.dimen.sillydroid_panel_padding),
+                        dimen(R.dimen.sillydroid_panel_padding),
+                        dimen(R.dimen.sillydroid_panel_padding)
+                    )
+                    addView(
+                        LinearLayout(activity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                            addView(
+                                TextView(activity).apply {
+                                    setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsCardTitle)
+                                    text = label
+                                    setTextColor(resolveColor(MaterialR.attr.colorOnSurface))
+                                }
+                            )
+                            if (description.isNotBlank()) {
+                                addView(createSettingDescription(description))
+                            }
+                        }
+                    )
+                    if (selected) {
+                        addView(
+                            TextView(activity).apply {
+                                setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsButton)
+                                text = activity.getString(R.string.bootstrap_settings_host_runtime_patch_selected_value)
+                                setTextColor(resolveColor(MaterialR.attr.colorPrimary))
+                                gravity = Gravity.CENTER
+                                layoutParams = LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply {
+                                    leftMargin = dimen(R.dimen.sillydroid_space_md)
+                                }
+                            }
+                        )
+                    }
+                }
+            )
+        }
     }
 
     private fun showInputSettingEditor(
@@ -477,8 +638,8 @@ class RuntimePatchBottomSheetController(
         onDisplayValueChanged: (String) -> Unit
     ) {
         val inputLayout = activity.createSettingsTextInputLayout(
-            hintText = setting.key,
-            helperTextValue = setting.description.takeIf { description -> description.isNotBlank() }
+            hintText = setting.title.ifBlank { setting.key },
+            helperTextValue = userFacingPatchText(setting.description).takeIf { description -> description.isNotBlank() }
         ).apply {
             setPadding(
                 dimen(R.dimen.sillydroid_dialog_content_padding_horizontal),
@@ -497,7 +658,7 @@ class RuntimePatchBottomSheetController(
         }
         inputLayout.addView(input)
         MaterialAlertDialogBuilder(activity)
-            .setTitle(setting.title.ifBlank { setting.key })
+            .setTitle(createSettingPickerTitle(setting))
             .setView(inputLayout)
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val normalizedValue = sanitizeInputValue(setting, input.text?.toString().orEmpty(), normalizedType)
@@ -549,6 +710,20 @@ class RuntimePatchBottomSheetController(
             ?: value.ifBlank { setting.defaultValue }
     }
 
+    private fun userFacingPatchText(rawText: String): String {
+        return when (rawText.trim()) {
+            "控制 /api/characters/all 首次索引角色卡时同时处理的数量。auto 会按 CPU 线程自动选择并限制上限；数值越高越快但内存峰值越高。" ->
+                "控制首次打开角色列表时同时处理的角色数量。自动模式适合大多数设备；数字越大越快，但更容易占用内存。"
+            "按设备可用 CPU 线程自动选择。" ->
+                "推荐。根据当前设备自动选择，优先保证稳定。"
+            "更保守，适合低内存或容易 OOM 的设备。" ->
+                "更保守，适合低内存或容易闪退的设备。"
+            "更激进，适合内存充足和 CPU 较强的设备。" ->
+                "更激进，适合内存充足、角色很多且想更快完成索引的设备。"
+            else -> rawText
+        }
+    }
+
     private fun createModuleTitle(module: RuntimePatchModuleMetadataSnapshot): TextView {
         return TextView(activity).apply {
             setTextAppearance(R.style.TextAppearance_SillyDroid_SettingsCardTitle)
@@ -598,17 +773,6 @@ class RuntimePatchBottomSheetController(
         return "v$version / $supportedVersions"
     }
 
-    private fun supportedVersionsLabel(module: RuntimePatchModuleMetadataSnapshot): String {
-        return if (module.supportedTavernVersions.isEmpty()) {
-            activity.getString(R.string.bootstrap_settings_host_runtime_patch_supported_versions_unknown)
-        } else {
-            activity.getString(
-                R.string.bootstrap_settings_host_runtime_patch_supported_versions,
-                module.supportedTavernVersions.joinToString(", ")
-            )
-        }
-    }
-
     private fun createSettingsSwitch(): MaterialSwitch {
         return MaterialSwitch(activity, null, MaterialR.attr.materialSwitchStyle)
     }
@@ -640,8 +804,7 @@ class RuntimePatchBottomSheetController(
         val changed = viewModel.setRuntimePatchSettingOverride(
             moduleId = moduleId,
             settingKey = setting.key,
-            value = normalizedValue,
-            restartRequired = setting.restartRequired
+            value = normalizedValue
         )
         if (changed && setting.restartRequired) {
             showServiceRestartRequiredHint()

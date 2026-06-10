@@ -24,6 +24,7 @@
     <dimen name="sillydroid_settings_dense_icon_button_padding">3dp</dimen>
     <dimen name="sillydroid_settings_input_trailing_button_size">24dp</dimen>
     <dimen name="sillydroid_settings_input_trailing_button_padding">3dp</dimen>
+    <dimen name="sillydroid_settings_input_trailing_button_margin_end">10dp</dimen>
     <dimen name="sillydroid_card_radius">18dp</dimen>
     <dimen name="sillydroid_panel_card_radius">16dp</dimen>
     <dimen name="sillydroid_nested_card_radius">14dp</dimen>

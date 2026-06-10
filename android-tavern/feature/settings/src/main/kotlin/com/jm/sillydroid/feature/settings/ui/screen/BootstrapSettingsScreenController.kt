@@ -56,6 +56,7 @@ class BootstrapSettingsScreenController(
     private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val backgroundHealthCheckSwitch: MaterialSwitch,
     private val tavernRuntimePatchRow: View,
+    private val tavernRuntimePatchConfigureButton: MaterialButton,
     private val tavernRuntimePatchSwitch: MaterialSwitch,
     private val pullRefreshSwitch: MaterialSwitch,
     private val browserEngineRow: View,
@@ -109,6 +110,7 @@ class BootstrapSettingsScreenController(
         backgroundOnlyModeSwitch.isEnabled = !busy
         backgroundHealthCheckSwitch.isEnabled = !busy
         tavernRuntimePatchRow.isEnabled = !busy
+        tavernRuntimePatchConfigureButton.isEnabled = !busy
         tavernRuntimePatchSwitch.isEnabled = !busy
         pullRefreshSwitch.isEnabled = !busy
         browserEngineRow.isEnabled = !busy

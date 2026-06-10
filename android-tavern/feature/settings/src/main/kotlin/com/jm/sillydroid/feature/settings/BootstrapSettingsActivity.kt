@@ -119,6 +119,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var backgroundOnlyModeSwitch: MaterialSwitch
     private lateinit var backgroundHealthCheckSwitch: MaterialSwitch
     private lateinit var tavernRuntimePatchRow: View
+    private lateinit var tavernRuntimePatchConfigureButton: MaterialButton
     private lateinit var tavernRuntimePatchSwitch: MaterialSwitch
     private lateinit var pullRefreshSwitch: MaterialSwitch
     private lateinit var browserEngineRow: View
@@ -363,6 +364,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         backgroundOnlyModeSwitch = findViewById(R.id.bootstrapSettingsBackgroundOnlyModeSwitch)
         backgroundHealthCheckSwitch = findViewById(R.id.bootstrapSettingsBackgroundHealthCheckSwitch)
         tavernRuntimePatchRow = findViewById(R.id.bootstrapSettingsRuntimePatchRow)
+        tavernRuntimePatchConfigureButton = findViewById(R.id.bootstrapSettingsRuntimePatchConfigureButton)
         tavernRuntimePatchSwitch = findViewById(R.id.bootstrapSettingsRuntimePatchSwitch)
         pullRefreshSwitch = findViewById(R.id.bootstrapSettingsPullRefreshSwitch)
         browserEngineRow = findViewById(R.id.bootstrapSettingsBrowserEngineRow)
@@ -451,6 +453,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
             tavernRuntimePatchRow = tavernRuntimePatchRow,
+            tavernRuntimePatchConfigureButton = tavernRuntimePatchConfigureButton,
             tavernRuntimePatchSwitch = tavernRuntimePatchSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
             browserEngineRow = browserEngineRow,
@@ -499,11 +502,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         )
         runtimePatchBottomSheetController = RuntimePatchBottomSheetController(
             activity = this,
-            viewModel = settingsActivityViewModel,
-            onRestartServiceRequested = {
-                updateResultFlags(shouldStartBootstrap = true)
-                finish()
-            }
+            viewModel = settingsActivityViewModel
         )
         stateController = SettingsActivityStateController(
             activity = this,
@@ -512,6 +511,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
             tavernRuntimePatchRow = tavernRuntimePatchRow,
+            tavernRuntimePatchConfigureButton = tavernRuntimePatchConfigureButton,
             tavernRuntimePatchSwitch = tavernRuntimePatchSwitch,
             pullRefreshSwitch = pullRefreshSwitch,
             browserEngineRow = browserEngineRow,

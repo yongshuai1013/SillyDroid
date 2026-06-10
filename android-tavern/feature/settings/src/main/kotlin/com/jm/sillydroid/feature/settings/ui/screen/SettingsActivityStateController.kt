@@ -8,6 +8,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
@@ -25,6 +26,7 @@ class SettingsActivityStateController(
     private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val backgroundHealthCheckSwitch: MaterialSwitch,
     private val tavernRuntimePatchRow: View,
+    private val tavernRuntimePatchConfigureButton: MaterialButton,
     private val tavernRuntimePatchSwitch: MaterialSwitch,
     private val pullRefreshSwitch: MaterialSwitch,
     private val browserEngineRow: View,
@@ -56,6 +58,9 @@ class SettingsActivityStateController(
             viewModel.setBackgroundHealthCheckEnabled(isChecked)
         }
         tavernRuntimePatchRow.setOnClickListener {
+            showRuntimePatchBottomSheet(viewModel.uiState.value)
+        }
+        tavernRuntimePatchConfigureButton.setOnClickListener {
             showRuntimePatchBottomSheet(viewModel.uiState.value)
         }
         tavernRuntimePatchSwitch.isChecked = initialState.tavernRuntimePatchEnabled

@@ -595,13 +595,14 @@
                                         android:textColor="?attr/colorOnSurfaceVariant" />
                                 </LinearLayout>
 
-                                <TextView
-                                    style="@style/TextAppearance.SillyDroid.SettingsCardTitle"
+                                <com.google.android.material.button.MaterialButton
+                                    android:id="@+id/bootstrapSettingsRuntimePatchConfigureButton"
+                                    style="@style/Widget.SillyDroid.SettingsButton.Outlined"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_marginStart="@dimen/sillydroid_space_sm"
-                                    android:text="&gt;"
-                                    android:textColor="?attr/colorOnSurfaceVariant" />
+                                    android:minWidth="0dp"
+                                    android:text="@string/bootstrap_settings_host_runtime_patch_configure_action" />
 
                                 <com.google.android.material.materialswitch.MaterialSwitch
                                     style="@style/Widget.SillyDroid.SettingsSwitch"
