@@ -29,3 +29,4 @@ android-tavern/app/signing/release-signing.properties
 AGENTS.md
 classes.jar
 .agent_memory/
+.tmp/

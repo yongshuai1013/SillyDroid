@@ -14,6 +14,13 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.FileVisitOption
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
@@ -81,6 +88,43 @@ internal fun shouldForcePackageHostRuntime(appFlags: Int, bootstrapRoot: File): 
     // 这个 marker 只服务真机复现：debug 包可以强制绕过 nativeLibraryDir，
     // 直接验证安装目录 lib/arm64 下的 host runtime 是否可作为 nativeLibraryDir 缺失时的兜底；release 包不会响应该开关。
     return isDebuggable && File(bootstrapRoot, forcePackageHostRuntimeMarkerFileName).isFile
+}
+
+internal fun deleteRecursivelyWithoutFollowingSymlinks(target: File) {
+    val rootPath = target.toPath()
+    if (!Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS)) {
+        return
+    }
+
+    // serverDir 里 third-party 是指向持久 extensions 的 symlink；重解包时只能删除链接本身。
+    Files.walkFileTree(
+        rootPath,
+        emptySet<FileVisitOption>(),
+        Int.MAX_VALUE,
+        object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.deleteIfExists(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+                Files.deleteIfExists(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+                if (exc != null) {
+                    throw exc
+                }
+                Files.deleteIfExists(dir)
+                return FileVisitResult.CONTINUE
+            }
+        }
+    )
+}
+
+private fun File.existsWithoutFollowingSymlinks(): Boolean {
+    return Files.exists(toPath(), LinkOption.NOFOLLOW_LINKS)
 }
 
 private fun File.containsNamedFiles(fileNames: List<String>): Boolean {
@@ -368,7 +412,6 @@ class AssetExtractor(private val context: Context) {
         private val serverRequiredRelativePaths = listOf(
             "bootstrap-manifest.json",
             "default/config.yaml",
-            "tavern-entrypoint.sh",
             "dependency-post-extract.sh",
             "server.js",
             "package.json",
@@ -808,13 +851,7 @@ class AssetExtractor(private val context: Context) {
             }
         }
 
-        if (targetDirectory.exists()) {
-            if (targetDirectory.isDirectory) {
-                targetDirectory.deleteRecursively()
-            } else {
-                targetDirectory.delete()
-            }
-        }
+        deleteRecursivelyWithoutFollowingSymlinks(targetDirectory)
         targetDirectory.mkdirs()
         return true
     }
@@ -903,13 +940,7 @@ class AssetExtractor(private val context: Context) {
         symlinkManifestRelativePath: String? = null,
         onProgress: (processedEntries: Int, totalEntries: Int) -> Unit = { _, _ -> }
     ) {
-        if (targetDirectory.exists()) {
-            if (targetDirectory.isDirectory) {
-                targetDirectory.deleteRecursively()
-            } else {
-                targetDirectory.delete()
-            }
-        }
+        deleteRecursivelyWithoutFollowingSymlinks(targetDirectory)
         targetDirectory.mkdirs()
 
         val canonicalTargetDirectory = targetDirectory.canonicalFile
@@ -934,19 +965,19 @@ class AssetExtractor(private val context: Context) {
                     }
 
                     if (entry.isDirectory) {
-                        if (outputFile.exists() && !outputFile.isDirectory) {
-                            outputFile.deleteRecursively()
+                        if (outputFile.existsWithoutFollowingSymlinks() && !outputFile.isDirectory) {
+                            deleteRecursivelyWithoutFollowingSymlinks(outputFile)
                         }
-                        if (!outputFile.exists() && !outputFile.mkdirs()) {
+                        if (!outputFile.existsWithoutFollowingSymlinks() && !outputFile.mkdirs()) {
                             throw BootstrapException("创建目录失败：$relativePath")
                         }
                     } else {
                         val parentDirectory = outputFile.parentFile
                         if (parentDirectory != null) {
-                            if (parentDirectory.exists() && !parentDirectory.isDirectory) {
-                                parentDirectory.deleteRecursively()
+                            if (parentDirectory.existsWithoutFollowingSymlinks() && !parentDirectory.isDirectory) {
+                                deleteRecursivelyWithoutFollowingSymlinks(parentDirectory)
                             }
-                            if (!parentDirectory.exists() && !parentDirectory.mkdirs()) {
+                            if (!parentDirectory.existsWithoutFollowingSymlinks() && !parentDirectory.mkdirs()) {
                                 throw BootstrapException("创建文件父目录失败：$relativePath")
                             }
                         }
@@ -1021,13 +1052,7 @@ class AssetExtractor(private val context: Context) {
                     throw BootstrapException(BootstrapError.ArchiveCorrupted("bootstrap symlink 路径非法：$relativePath"))
                 }
 
-                if (linkFile.exists()) {
-                    if (linkFile.isDirectory) {
-                        linkFile.deleteRecursively()
-                    } else {
-                        linkFile.delete()
-                    }
-                }
+                deleteRecursivelyWithoutFollowingSymlinks(linkFile)
 
                 try {
                     Os.symlink(linkTarget, linkFile.absolutePath)
@@ -1109,14 +1134,11 @@ class AssetExtractor(private val context: Context) {
             }
             .forEach { sourceDirectory ->
                 val targetDirectory = File(targetExtensionsRoot, sourceDirectory.name)
-                if (targetDirectory.exists() && !replaceExisting) {
+                if (targetDirectory.existsWithoutFollowingSymlinks() && !replaceExisting) {
                     return@forEach
                 }
 
-                if (targetDirectory.exists()) {
-                    targetDirectory.deleteRecursively()
-                }
-
+                deleteRecursivelyWithoutFollowingSymlinks(targetDirectory)
                 copyBundledHostExtensionSafely(sourceDirectory, targetDirectory)
             }
     }
@@ -1129,7 +1151,7 @@ class AssetExtractor(private val context: Context) {
                 "${targetDirectory.name}.sillydroid-stage-${System.currentTimeMillis()}-$attempt"
             )
             try {
-                stageDirectory.deleteRecursively()
+                deleteRecursivelyWithoutFollowingSymlinks(stageDirectory)
                 if (!sourceDirectory.copyRecursively(stageDirectory, overwrite = true)) {
                     throw IOException("copyRecursively returned false")
                 }
@@ -1143,18 +1165,17 @@ class AssetExtractor(private val context: Context) {
                     throw IOException("staged manifest size mismatch")
                 }
 
-                targetDirectory.deleteRecursively()
+                deleteRecursivelyWithoutFollowingSymlinks(targetDirectory)
                 if (!stageDirectory.renameTo(targetDirectory)) {
                     if (!stageDirectory.copyRecursively(targetDirectory, overwrite = true)) {
                         throw IOException("failed to promote staged extension")
                     }
-                    stageDirectory.deleteRecursively()
+                    deleteRecursivelyWithoutFollowingSymlinks(stageDirectory)
                 }
                 return
             } catch (error: Throwable) {
                 lastError = error
-                stageDirectory.deleteRecursively()
-                targetDirectory.deleteRecursively()
+                deleteRecursivelyWithoutFollowingSymlinks(stageDirectory)
             }
         }
 
@@ -1216,9 +1237,7 @@ class AssetExtractor(private val context: Context) {
             return
         }
 
-        if (paths.hostPrefixDir.exists()) {
-            paths.hostPrefixDir.deleteRecursively()
-        }
+        deleteRecursivelyWithoutFollowingSymlinks(paths.hostPrefixDir)
 
         extractArchiveAsset(
             assetPath = "${BootConfig.bootstrapAssetRoot}/rootfs/rootfs-usr.zip",
@@ -1273,6 +1292,7 @@ class BootstrapLayoutVerifier(private val paths: HostPaths) {
         return listOf(
             "scripts/ensure-rootfs-runtime.sh" to File(paths.scriptsDir, "ensure-rootfs-runtime.sh"),
             "scripts/start-server.sh" to File(paths.scriptsDir, "start-server.sh"),
+            "scripts/tavern-entrypoint.sh" to File(paths.scriptsDir, "tavern-entrypoint.sh"),
             "scripts/termux-host-runtime.sh" to File(paths.scriptsDir, "termux-host-runtime.sh"),
             "rootfs/fs/bin/sh" to File(paths.rootfsDir, "fs/bin/sh"),
             "rootfs/rootfs-manifest.json" to File(paths.rootfsDir, "rootfs-manifest.json"),
@@ -1280,8 +1300,7 @@ class BootstrapLayoutVerifier(private val paths: HostPaths) {
             "hostRuntimeDir/libtermux-git.so" to paths.hostTermuxGitBinary,
             "hostRuntimeDir/libtermux-git-remote-http.so" to paths.hostTermuxGitRemoteHttpBinary,
             "hostRuntimeDir/libtermux-sh.so" to paths.hostTermuxShellBinary,
-            "server/bootstrap-manifest.json" to File(paths.serverDir, "bootstrap-manifest.json"),
-            "server/tavern-entrypoint.sh" to File(paths.serverDir, "tavern-entrypoint.sh")
+            "server/bootstrap-manifest.json" to File(paths.serverDir, "bootstrap-manifest.json")
         )
     }
 }

@@ -383,9 +383,9 @@ if [[ -n "$compare_base" && "$compare_base" != '00000000000000000000000000000000
         dependency_changed='true'
     fi
 
-    if printf '%s\n' "$changed_files" | grep -E '^(scripts/(android-build-common\.sh|sync-tavern-android-bootstrap\.sh)|android-tavern/server-overlay/)' >/dev/null 2>&1; then
-        server_changed='true'
-    fi
+    # Stage 3 server source is keyed only by the requested upstream Tavern tag.
+    # Host scripts, runtime patches, overlays, and build helpers belong to stage 4
+    # so they must not invalidate an existing server-source prerequisite.
 
     if printf '%s\n' "$changed_files" | grep -E '^(android-tavern/|gradle/|gradlew|gradlew\.bat|scripts/(android-build-common\.sh|build-tavern-android-apk\.sh)|sillydroid-build-config\.json|\.github/workflows/sillydroid-upstream-apk\.yml)' >/dev/null 2>&1; then
         apk_changed='true'

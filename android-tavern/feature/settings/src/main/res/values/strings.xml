@@ -38,7 +38,8 @@
     <string name="bootstrap_settings_host_runtime_patch_picker_title">选择%1$s</string>
     <string name="bootstrap_settings_host_runtime_patch_selected_value">已选择</string>
     <string name="bootstrap_settings_host_runtime_patch_close">关闭</string>
-    <string name="bootstrap_settings_host_runtime_patch_restart_service">重启服务</string>
+    <string name="bootstrap_settings_host_runtime_patch_restart_service">保存并重启</string>
+    <string name="bootstrap_settings_host_service_restart_hint">设置已更新，重启服务后生效。</string>
     <string name="bootstrap_settings_host_node_memory_limit_title">Node 内存上限</string>
     <string name="bootstrap_settings_host_node_memory_limit_summary">--max-old-space-size 的 V8 内存。</string>
     <string name="bootstrap_settings_host_node_memory_limit_dialog_title">选择 Node 内存上限</string>

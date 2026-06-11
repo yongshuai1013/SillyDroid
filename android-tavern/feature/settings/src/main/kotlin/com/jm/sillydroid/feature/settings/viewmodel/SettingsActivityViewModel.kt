@@ -108,12 +108,14 @@ class SettingsActivityViewModel(
         _uiState.update { current -> current.copy(backgroundOnlyModeEnabled = enabled) }
     }
 
-    fun setBackgroundHealthCheckEnabled(enabled: Boolean) {
+    fun setBackgroundHealthCheckEnabled(enabled: Boolean): Boolean {
         // 后台健康检查会周期性探测本地 Tavern 服务；默认关闭，避免不通的机器反复触发重启刷新。
-        if (hostPreferencesRepository.backgroundHealthCheckEnabled != enabled) {
+        val changed = hostPreferencesRepository.backgroundHealthCheckEnabled != enabled
+        if (changed) {
             hostPreferencesRepository.backgroundHealthCheckEnabled = enabled
         }
         _uiState.update { current -> current.copy(backgroundHealthCheckEnabled = enabled) }
+        return changed
     }
 
     // Runtime patch 只在 Node 服务启动前注入；设置页只保存开关并提示重启服务，避免热切换半生效。

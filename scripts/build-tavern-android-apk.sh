@@ -4,7 +4,7 @@ set -euo pipefail
 # Stage Contract: 4/4 APK Assembly
 # Responsibilities:
 # - Consume stage-1 runtime image, stage-2 dependency packs, and stage-3 server source.
-# - Compose the final server-payload only inside stage-4 temporary output, inject assets, and assemble the APK.
+# - Compose the final server-payload only inside stage-4 temporary output, patch Android defaults, inject host assets, and assemble the APK.
 # Must not:
 # - Implicitly rebuild or refresh stage-1/stage-2/stage-3 prerequisites.
 # - Move stage-3 responsibilities back into this script's callers or into earlier stages.
@@ -24,6 +24,9 @@ android_root="$(realpath -m "$default_android_build_root/android-project/android
 dependency_pack_script="$workspace_root/scripts/build-tavern-dependency-packs.sh"
 build_config_path="$workspace_root/sillydroid-build-config.json"
 rootfs_manifest_path="$workspace_android_root/app/src/main/assets/bootstrap/rootfs/rootfs-manifest.json"
+server_payload_compose_cache_version='stage4-server-payload-compose-v2'
+android_default_config_patch_version='browserLaunch-false_git-builtin_v1'
+runtime_image_apply_cache_version='stage4-runtime-image-apply-v1'
 
 read_build_config_value() {
     local key_path="$1"
@@ -52,7 +55,7 @@ usage() {
 Usage: build-tavern-android-apk.sh [--runtime-image <path>] [--server-package <path> | --tag <sillytavern-tag>] [--runtime-rid linux-arm64] [--build-type debug|release] [--dependency-packs <comma-separated>]
 
 说明：
-- runtime image / dependency packs 只负责 Termux rootfs、环境依赖、环境修复脚本；server source 只负责 Tavern 源码与 server overlay。
+- runtime image / dependency packs 只负责 Termux rootfs、环境依赖、环境修复脚本；server source 只负责指定上游 tag 的 Tavern 源码与 npm 运行依赖。
 - Android Host 扩展与默认扩展列表在 APK build 阶段分别写入独立 assets 目录，不再混入 server source。
 - 这是纯 stage 4 脚本，只消费现有 runtime image、server source 与 dependency packs，然后把它们合并进 android-tavern 工程。
 - 若不传 --runtime-image，默认读取 artifacts/releases/rootfs/<rid>/tavern-rootfs-<rid>.zip；缺失时会直接报错。
@@ -532,6 +535,332 @@ PY
     return 0
 }
 
+write_server_payload_compose_fingerprint() {
+    local generated_root="$1"
+    local dependency_root="$2"
+    local output_path="$3"
+    local server_source_path="$generated_root/server-source.zip"
+    local server_source_manifest_path="$generated_root/server-source-manifest.json"
+    local -a dependency_pack_names=()
+
+    command -v python3 >/dev/null 2>&1 || return 1
+    mapfile -t dependency_pack_names < <(resolve_dependency_pack_list)
+
+    python3 - "$output_path" "$server_payload_compose_cache_version" "$runtime_rid" "$tavern_tag" "$server_source_path" "$server_source_manifest_path" "$dependency_root" "$android_default_config_patch_version" "${dependency_pack_names[@]}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+output_path = pathlib.Path(sys.argv[1])
+cache_version = sys.argv[2]
+runtime_rid = sys.argv[3]
+tavern_tag = sys.argv[4]
+server_source_path = pathlib.Path(sys.argv[5])
+server_source_manifest_path = pathlib.Path(sys.argv[6])
+dependency_root = pathlib.Path(sys.argv[7])
+android_default_config_patch_version = sys.argv[8]
+requested_packs = [item.strip() for item in sys.argv[9:] if item.strip()]
+
+
+def file_digest(path: pathlib.Path) -> dict:
+    if not path.is_file():
+        raise SystemExit(f"missing input: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": path.name,
+        "sizeBytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
+dependency_inputs = []
+for name in requested_packs:
+    manifest_path = dependency_root / f"{name}.manifest.json"
+    if not manifest_path.is_file():
+        raise SystemExit(f"missing dependency manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    archive_file = str(manifest.get("archiveFile") or "").strip()
+    if not archive_file:
+        raise SystemExit(f"dependency manifest missing archiveFile: {manifest_path}")
+    archive_path = dependency_root / archive_file
+    dependency_inputs.append({
+        "name": name,
+        "manifest": file_digest(manifest_path),
+        "archive": file_digest(archive_path),
+    })
+
+payload = {
+    "cacheVersion": cache_version,
+    "runtimeRid": runtime_rid,
+    "tavernTag": tavern_tag,
+    "androidDefaultConfigPatchVersion": android_default_config_patch_version,
+    "serverSourceManifest": file_digest(server_source_manifest_path),
+    "serverSourceArchive": file_digest(server_source_path),
+    "dependencyPacks": dependency_inputs,
+}
+
+output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+composed_server_payload_satisfy_request() {
+    local generated_root="$1"
+    local dependency_root="$2"
+    local output_package_path="$3"
+    local composed_manifest_path="$(dirname "$output_package_path")/bootstrap-manifest.json"
+    local fingerprint_path="$(dirname "$output_package_path")/compose-fingerprint.json"
+    local requested_fingerprint_path=''
+
+    [[ -f "$output_package_path" && -f "$composed_manifest_path" ]] || return 1
+    if [[ ! -f "$fingerprint_path" ]]; then
+        adopt_existing_composed_server_payload_if_safe "$generated_root" "$dependency_root" "$output_package_path" || return 1
+    fi
+    [[ -f "$fingerprint_path" ]] || return 1
+    requested_fingerprint_path="$(mktemp)"
+    if ! write_server_payload_compose_fingerprint "$generated_root" "$dependency_root" "$requested_fingerprint_path"; then
+        rm -f "$requested_fingerprint_path"
+        return 1
+    fi
+
+    if ! cmp -s "$requested_fingerprint_path" "$fingerprint_path"; then
+        rm -f "$requested_fingerprint_path"
+        return 1
+    fi
+    rm -f "$requested_fingerprint_path"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 1
+    fi
+
+    python3 - "$output_package_path" "$composed_manifest_path" "$runtime_rid" <<'PY'
+import json
+import pathlib
+import sys
+
+archive_path = pathlib.Path(sys.argv[1])
+manifest_path = pathlib.Path(sys.argv[2])
+runtime_rid = sys.argv[3]
+
+payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+if str(payload.get("runtimeRid") or "").strip() != runtime_rid:
+    raise SystemExit(1)
+if str(payload.get("archiveFile") or "").strip() != archive_path.name:
+    raise SystemExit(1)
+if int(payload.get("archiveSizeBytes") or 0) != archive_path.stat().st_size:
+    raise SystemExit(1)
+PY
+}
+
+adopt_existing_composed_server_payload_if_safe() {
+    local generated_root="$1"
+    local dependency_root="$2"
+    local output_package_path="$3"
+    local composed_manifest_path="$(dirname "$output_package_path")/bootstrap-manifest.json"
+    local fingerprint_path="$(dirname "$output_package_path")/compose-fingerprint.json"
+    local requested_fingerprint_path=''
+
+    [[ -f "$output_package_path" && -f "$composed_manifest_path" ]] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+
+    # 兼容引入缓存指纹前已经组合好的 payload：只有确认它不包含宿主脚本/patch，
+    # 且 Android 默认配置已经应用后，才收编为可复用重型运行包。
+    python3 - "$output_package_path" "$composed_manifest_path" "$runtime_rid" <<'PY'
+import json
+import pathlib
+import re
+import sys
+import zipfile
+
+archive_path = pathlib.Path(sys.argv[1])
+manifest_path = pathlib.Path(sys.argv[2])
+runtime_rid = sys.argv[3]
+
+payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+if str(payload.get("runtimeRid") or "").strip() != runtime_rid:
+    raise SystemExit(1)
+if str(payload.get("archiveFile") or "").strip() != archive_path.name:
+    raise SystemExit(1)
+if int(payload.get("archiveSizeBytes") or 0) != archive_path.stat().st_size:
+    raise SystemExit(1)
+
+with zipfile.ZipFile(archive_path) as archive:
+    names = archive.namelist()
+    forbidden = [
+        name for name in names
+        if name == "tavern-entrypoint.sh"
+        or name.startswith("runtime-patches/")
+        or name.startswith("bootstrap/")
+    ]
+    if forbidden:
+        raise SystemExit(1)
+
+    try:
+        config = archive.read("default/config.yaml").decode("utf-8")
+    except KeyError:
+        raise SystemExit(1)
+
+
+def section_value(text: str, section_name: str, key_name: str) -> str | None:
+    in_section = False
+    section_indent = 0
+    key_pattern = re.compile(rf"^\s*{re.escape(key_name)}:\s*([^#\s]+)")
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        section_match = re.match(r"^(\s*)([A-Za-z0-9_-]+):\s*$", line)
+        if section_match and not line.startswith((" ", "\t")):
+            in_section = section_match.group(2) == section_name
+            section_indent = len(section_match.group(1))
+            continue
+
+        if in_section and stripped and not line.startswith((" ", "\t")):
+            in_section = False
+
+        if not in_section:
+            continue
+
+        key_match = key_pattern.match(line)
+        if key_match:
+            return key_match.group(1).strip().strip('"\'')
+
+    return None
+
+
+if section_value(config, "browserLaunch", "enabled") != "false":
+    raise SystemExit(1)
+if section_value(config, "git", "backend") != "builtin":
+    raise SystemExit(1)
+PY
+
+    requested_fingerprint_path="$(mktemp)"
+    if ! write_server_payload_compose_fingerprint "$generated_root" "$dependency_root" "$requested_fingerprint_path"; then
+        rm -f "$requested_fingerprint_path"
+        return 1
+    fi
+    mv -f "$requested_fingerprint_path" "$fingerprint_path"
+    sillydroid_log "已收编可复用 Tavern server payload：$output_package_path"
+}
+
+patch_android_default_config() {
+    local config_path="$1"
+
+    if [[ ! -f "$config_path" ]] || ! command -v python3 >/dev/null 2>&1; then
+        return
+    fi
+
+    python3 - "$config_path" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+text = config_path.read_text(encoding="utf-8")
+lines = text.splitlines(keepends=True)
+section = None
+
+for index, line in enumerate(lines):
+    stripped = line.strip()
+
+    if re.fullmatch(r'browserLaunch:\s*', stripped):
+        section = 'browserLaunch'
+        continue
+
+    if re.fullmatch(r'git:\s*', stripped):
+        section = 'git'
+        continue
+
+    if section == 'browserLaunch' and re.match(r'enabled:\s*(true|false)\b', stripped):
+        lines[index] = re.sub(r'(enabled:\s*)(true|false)\b', r'\1false', line, count=1)
+        section = None
+        continue
+
+    if section == 'git' and re.match(r'backend:\s*\S+', stripped):
+        lines[index] = re.sub(r'(backend:\s*)\S+', r'\1builtin', line, count=1)
+        section = None
+        continue
+
+    if stripped and not line.startswith((' ', '\t', '#')):
+        section = None
+
+config_path.write_text(''.join(lines), encoding="utf-8")
+PY
+}
+
+write_runtime_image_apply_fingerprint() {
+    local image_path="$1"
+    local output_path="$2"
+
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "$output_path" "$runtime_image_apply_cache_version" "$runtime_rid" "$image_path" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+output_path = pathlib.Path(sys.argv[1])
+cache_version = sys.argv[2]
+runtime_rid = sys.argv[3]
+image_path = pathlib.Path(sys.argv[4])
+
+if not image_path.is_file():
+    raise SystemExit(f"missing runtime image: {image_path}")
+
+digest = hashlib.sha256()
+with image_path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+
+payload = {
+    "cacheVersion": cache_version,
+    "runtimeRid": runtime_rid,
+    "runtimeImage": {
+        "path": image_path.name,
+        "sizeBytes": image_path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    },
+}
+output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+runtime_image_applied_satisfy_request() {
+    local image_path="$1"
+    local project_root="$2"
+    local bootstrap_root="$project_root/app/src/main/assets/bootstrap"
+    local rootfs_root="$bootstrap_root/rootfs"
+    local jni_lib_root="$project_root/app/src/main/jniLibs/arm64-v8a"
+    local fingerprint_path="$bootstrap_root/rootfs/.sillydroid-runtime-image-fingerprint.json"
+    local requested_fingerprint_path=''
+
+    [[ -f "$rootfs_root/rootfs-fs.zip" ]] || return 1
+    [[ -f "$rootfs_root/rootfs-usr.zip" ]] || return 1
+    [[ -f "$rootfs_root/rootfs-manifest.json" ]] || return 1
+    [[ -f "$jni_lib_root/libtermux-node.so" ]] || return 1
+    [[ -f "$jni_lib_root/libtermux-git.so" ]] || return 1
+    [[ -f "$jni_lib_root/libtermux-git-remote-http.so" ]] || return 1
+    [[ -f "$jni_lib_root/libtermux-sh.so" ]] || return 1
+    [[ -f "$fingerprint_path" ]] || return 1
+
+    requested_fingerprint_path="$(mktemp)"
+    if ! write_runtime_image_apply_fingerprint "$image_path" "$requested_fingerprint_path"; then
+        rm -f "$requested_fingerprint_path"
+        return 1
+    fi
+
+    if ! cmp -s "$requested_fingerprint_path" "$fingerprint_path"; then
+        rm -f "$requested_fingerprint_path"
+        return 1
+    fi
+    rm -f "$requested_fingerprint_path"
+}
+
 compose_server_payload_from_components() {
     local generated_root="$1"
     local dependency_root="$2"
@@ -542,7 +871,8 @@ compose_server_payload_from_components() {
     local env_file_path="$compose_root/dependency-env.sh"
     local post_extract_hook_path="$compose_root/dependency-post-extract.sh"
     local selection_manifest_path="$compose_root/dependency-selection.json"
-    local composed_manifest_path="$generated_root/bootstrap-manifest.json"
+    local composed_manifest_path="$(dirname "$output_package_path")/bootstrap-manifest.json"
+    local fingerprint_path="$(dirname "$output_package_path")/compose-fingerprint.json"
     local output_archive_size_bytes='0'
     local archive_file
     local -a dependency_pack_names=()
@@ -573,9 +903,6 @@ EOF
         cat > "$post_extract_hook_path" <<'EOF'
 #!/bin/sh
 set -eu
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
-if [ -f "./tavern-entrypoint.sh" ]; then chmod 0755 "./tavern-entrypoint.sh"; fi
 EOF
         cat > "$selection_manifest_path" <<'EOF'
 {
@@ -705,7 +1032,6 @@ post_extract_lines = [
     "set -eu",
     'SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"',
     'cd "$SCRIPT_DIR"',
-    'if [ -f "./tavern-entrypoint.sh" ]; then chmod 0755 "./tavern-entrypoint.sh"; fi',
 ]
 for script in post_extract_scripts:
     escaped = script.replace('"', '\\"')
@@ -721,6 +1047,7 @@ PY
 
     sillydroid_progress_stage 2 4 "开始解包 server source"
     sillydroid_extract_archive_with_progress "$server_source_path" "$compose_root" 'server-source'
+    patch_android_default_config "$compose_root/default/config.yaml"
     while IFS= read -r archive_file; do
         [[ -z "$archive_file" ]] && continue
         sillydroid_log "导入 dependency pack：$archive_file"
@@ -764,6 +1091,10 @@ with open(manifest_path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
     fi
+
+    # 重型 server payload 只由 server source、dependency packs 和组合规则决定；
+    # 宿主 patch / sh 脚本是 APK 外层轻量资产，不能参与这个指纹。
+    write_server_payload_compose_fingerprint "$generated_root" "$dependency_root" "$fingerprint_path"
 
     sillydroid_progress_stage 4 4 "server payload 组合完成"
 }
@@ -854,8 +1185,12 @@ if [[ -z "$server_package_path" ]]; then
     sillydroid_log "复用已存在的 dependency packs：$dependency_packs_root"
 
     composed_server_package_path="$(realpath -m "$default_android_build_root/server-compose-output/$runtime_rid/$tavern_tag/server-payload.zip")"
-    sillydroid_progress_stage 1 3 "开始组合 Tavern server payload"
-    compose_server_payload_from_components "$generated_server_root" "$dependency_packs_root" "$composed_server_package_path"
+    if composed_server_payload_satisfy_request "$generated_server_root" "$dependency_packs_root" "$composed_server_package_path"; then
+        sillydroid_log "复用已组合的 Tavern server payload：$composed_server_package_path"
+    else
+        sillydroid_progress_stage 1 3 "开始组合 Tavern server payload"
+        compose_server_payload_from_components "$generated_server_root" "$dependency_packs_root" "$composed_server_package_path"
+    fi
     server_package_path="$composed_server_package_path"
 fi
 
@@ -866,9 +1201,15 @@ apply_runtime_image() {
     local bootstrap_root="$project_root/app/src/main/assets/bootstrap"
     local rootfs_root="$bootstrap_root/rootfs"
     local jni_lib_root="$project_root/app/src/main/jniLibs/arm64-v8a"
+    local fingerprint_path="$rootfs_root/.sillydroid-runtime-image-fingerprint.json"
 
     sillydroid_assert_path_exists "$image_path" "缺少 Android runtime image：$image_path"
     sillydroid_require_command unzip
+
+    if runtime_image_applied_satisfy_request "$image_path" "$project_root"; then
+        sillydroid_log "复用已应用的 Tavern runtime image：$rootfs_root"
+        return
+    fi
 
     sillydroid_log "开始应用 Tavern runtime image 到 Android 工程：$image_path"
     rm -rf "$extract_root" "$rootfs_root"
@@ -887,6 +1228,7 @@ apply_runtime_image() {
         -name 'lib*.so*' \
         -delete
     cp -R "$extract_root/jniLibs/arm64-v8a/." "$jni_lib_root/"
+    write_runtime_image_apply_fingerprint "$image_path" "$fingerprint_path"
 
     sillydroid_log "已应用 Tavern runtime image：$image_path"
 }
@@ -901,6 +1243,7 @@ apply_server_package() {
     local archive_path=''
     local archive_size_bytes='0'
     local synced_at_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    local current_manifest_path='__missing__'
 
     sillydroid_assert_path_exists "$package_path" "缺少 Tavern server 底包：$package_path"
 
@@ -923,21 +1266,35 @@ PY
     # 服务器 assets 目录只能保留当前生效的一个 payload zip，旧归档残留会被一并打进 APK。
     find "$server_root" -maxdepth 1 -type f -name '*.zip' ! -name "$archive_file_name" -delete
 
-    cp -f "$package_path" "$archive_path"
+    if [[ -f "$archive_path" && "$package_path" -ef "$archive_path" ]]; then
+        sillydroid_log "Tavern server payload 已在目标位置，无需复制：$archive_path"
+    elif [[ -f "$archive_path" ]] && cmp -s "$package_path" "$archive_path"; then
+        sillydroid_log "Tavern server payload 未变化，跳过大文件复制：$archive_path"
+    else
+        cp -f "$package_path" "$archive_path"
+    fi
     archive_size_bytes="$(stat -c '%s' "$archive_path")"
 
     if [[ -f "$source_manifest_path" ]]; then
-        cp -f "$source_manifest_path" "$manifest_path"
+        if [[ -f "$manifest_path" && "$source_manifest_path" -ef "$manifest_path" ]]; then
+            current_manifest_path="$manifest_path"
+        elif [[ -f "$manifest_path" ]] && cmp -s "$source_manifest_path" "$manifest_path"; then
+            current_manifest_path="$manifest_path"
+        else
+            cp -f "$source_manifest_path" "$manifest_path"
+            current_manifest_path="$manifest_path"
+        fi
     else
         cat > "$manifest_path" <<EOF
 {
   "runtimeRid": "$runtime_rid",
   "sourcePackage": "$(basename "$package_path")",
   "syncedAtUtc": "$synced_at_utc",
-    "archiveFile": "$archive_file_name",
+  "archiveFile": "$archive_file_name",
   "archiveSizeBytes": $archive_size_bytes
 }
 EOF
+        current_manifest_path="$manifest_path"
     fi
 
     sillydroid_log "已应用 Tavern server 底包：$package_path"

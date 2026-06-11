@@ -46,10 +46,33 @@ class SettingsActivityViewModelResultFlagsTest {
 
         assertFalse(viewModel.uiState.value.backgroundHealthCheckEnabled)
 
-        viewModel.setBackgroundHealthCheckEnabled(true)
+        val changed = viewModel.setBackgroundHealthCheckEnabled(true)
+        val unchanged = viewModel.setBackgroundHealthCheckEnabled(true)
 
+        assertTrue(changed)
+        assertFalse(unchanged)
         assertTrue(repository.backgroundHealthCheckEnabled)
         assertTrue(viewModel.uiState.value.backgroundHealthCheckEnabled)
+    }
+
+    @Test
+    fun `node memory settings only report changed when startup value changes`() {
+        val repository = FakeHostPreferencesRepository()
+        val viewModel = SettingsActivityViewModel(repository)
+
+        val oldSpaceChanged = viewModel.setNodeMaxOldSpaceMb(3072)
+        val oldSpaceUnchanged = viewModel.setNodeMaxOldSpaceMb(3072)
+        val semiSpaceChanged = viewModel.setNodeMaxSemiSpaceMb(64)
+        val semiSpaceUnchanged = viewModel.setNodeMaxSemiSpaceMb(64)
+
+        assertTrue(oldSpaceChanged)
+        assertFalse(oldSpaceUnchanged)
+        assertEquals(3072, repository.nodeMaxOldSpaceMb)
+        assertEquals(3072, viewModel.uiState.value.nodeMaxOldSpaceMb)
+        assertTrue(semiSpaceChanged)
+        assertFalse(semiSpaceUnchanged)
+        assertEquals(64, repository.nodeMaxSemiSpaceMb)
+        assertEquals(64, viewModel.uiState.value.nodeMaxSemiSpaceMb)
     }
 
     @Test
@@ -72,8 +95,10 @@ class SettingsActivityViewModelResultFlagsTest {
         assertFalse(viewModel.uiState.value.tavernRuntimePatchEnabled)
 
         val changed = viewModel.setTavernRuntimePatchEnabled(true)
+        val unchanged = viewModel.setTavernRuntimePatchEnabled(true)
 
         assertTrue(changed)
+        assertFalse(unchanged)
         assertTrue(repository.tavernRuntimePatchEnabled)
         assertTrue(viewModel.uiState.value.tavernRuntimePatchEnabled)
     }

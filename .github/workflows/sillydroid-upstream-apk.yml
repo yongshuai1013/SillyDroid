@@ -443,7 +443,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            android-tavern/server-overlay
             scripts
             sillydroid-build-config.json
 
@@ -455,7 +454,7 @@ jobs:
             ~/.cache/sillydroid-android-toolchain
             ~/.cache/sillydroid-tavern-android-bootstrap
             ~/.npm
-          key: tavern-server-source-${{ runner.os }}-${{ needs.plan.outputs.safe_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'android-tavern/server-overlay/**', 'sillydroid-build-config.json') }}
+          key: tavern-server-source-${{ runner.os }}-${{ needs.plan.outputs.safe_tag }}-${{ hashFiles('scripts/android-build-common.sh', 'scripts/sync-tavern-android-bootstrap.sh', 'sillydroid-build-config.json') }}
           restore-keys: |
             tavern-server-source-${{ runner.os }}-${{ needs.plan.outputs.safe_tag }}-
             tavern-server-source-${{ runner.os }}-

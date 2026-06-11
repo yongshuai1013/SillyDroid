@@ -31,7 +31,8 @@ import com.jm.sillydroid.feature.settings.viewmodel.SettingsActivityViewModel
 
 class RuntimePatchBottomSheetController(
     private val activity: AppCompatActivity,
-    private val viewModel: SettingsActivityViewModel
+    private val viewModel: SettingsActivityViewModel,
+    private val onServiceRestartRequired: () -> Unit
 ) {
     fun show(state: SettingsActivityUiState = viewModel.uiState.value) {
         val dialog = BottomSheetDialog(activity)
@@ -789,6 +790,7 @@ class RuntimePatchBottomSheetController(
         // Patch 配置只能在下一次 Node 服务启动前注入；抽屉只负责保存配置，
         // 真正的重启动作统一交给设置页底部共享操作条处理。
         showRestartHint()
+        onServiceRestartRequired()
     }
 
     private fun updateModuleEnabled(moduleId: String, enabled: Boolean) {

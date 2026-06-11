@@ -502,7 +502,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         )
         runtimePatchBottomSheetController = RuntimePatchBottomSheetController(
             activity = this,
-            viewModel = settingsActivityViewModel
+            viewModel = settingsActivityViewModel,
+            onServiceRestartRequired = { screenController.updateRestartServicePending(true) }
         )
         stateController = SettingsActivityStateController(
             activity = this,
@@ -525,6 +526,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             debugDiagnosticsSwitch = debugDiagnosticsSwitch,
             unrestrictedFileImportSelectionSwitch = unrestrictedFileImportSelectionSwitch,
             showRuntimePatchBottomSheet = runtimePatchBottomSheetController::show,
+            onServiceRestartRequired = { screenController.updateRestartServicePending(true) },
             applyHostDisplayMode = ::applySettingsSurfaceSystemBars,
             renderResultFlags = ::renderResultFlags
         )

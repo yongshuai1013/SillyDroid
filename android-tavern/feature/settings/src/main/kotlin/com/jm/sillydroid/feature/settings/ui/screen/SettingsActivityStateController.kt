@@ -40,6 +40,7 @@ class SettingsActivityStateController(
     private val debugDiagnosticsSwitch: MaterialSwitch,
     private val unrestrictedFileImportSelectionSwitch: MaterialSwitch,
     private val showRuntimePatchBottomSheet: (SettingsActivityUiState) -> Unit,
+    private val onServiceRestartRequired: () -> Unit,
     private val applyHostDisplayMode: (HostDisplayMode) -> Unit,
     private val renderResultFlags: (SettingsActivityUiState) -> Unit
 ) {
@@ -55,7 +56,15 @@ class SettingsActivityStateController(
         }
         backgroundHealthCheckSwitch.isChecked = initialState.backgroundHealthCheckEnabled
         backgroundHealthCheckSwitch.setOnCheckedChangeListener { _, isChecked ->
-            viewModel.setBackgroundHealthCheckEnabled(isChecked)
+            val changed = viewModel.setBackgroundHealthCheckEnabled(isChecked)
+            if (changed) {
+                onServiceRestartRequired()
+                Toast.makeText(
+                    activity,
+                    R.string.bootstrap_settings_host_service_restart_hint,
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
         tavernRuntimePatchRow.setOnClickListener {
             showRuntimePatchBottomSheet(viewModel.uiState.value)
@@ -67,6 +76,7 @@ class SettingsActivityStateController(
         tavernRuntimePatchSwitch.setOnCheckedChangeListener { _, isChecked ->
             val changed = viewModel.setTavernRuntimePatchEnabled(isChecked)
             if (changed) {
+                onServiceRestartRequired()
                 Toast.makeText(
                     activity,
                     R.string.bootstrap_settings_host_runtime_patch_restart_hint,
@@ -196,6 +206,7 @@ class SettingsActivityStateController(
                 // setNodeMaxOldSpaceMb 返回是否真正变更；只在变更时提示重启生效，避免重复选同一档位也弹提示。
                 val changed = viewModel.setNodeMaxOldSpaceMb(selectedValueMb)
                 if (changed) {
+                    onServiceRestartRequired()
                     Toast.makeText(
                         activity,
                         R.string.bootstrap_settings_host_node_memory_limit_restart_hint,
@@ -219,6 +230,7 @@ class SettingsActivityStateController(
                 // 与老生代一致：只在真正变更时提示重启生效。
                 val changed = viewModel.setNodeMaxSemiSpaceMb(selectedValueMb)
                 if (changed) {
+                    onServiceRestartRequired()
                     Toast.makeText(
                         activity,
                         R.string.bootstrap_settings_host_node_new_space_limit_restart_hint,

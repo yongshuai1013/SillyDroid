@@ -49,7 +49,7 @@ class AdbContext:
 
     @property
     def server_entrypoint(self) -> str:
-        return f"{self.server_dir}/tavern-entrypoint.sh"
+        return f"{self.app_root}/files/android-tavern/bootstrap/scripts/tavern-entrypoint.sh"
 
     @property
     def termux_node_bin(self) -> str:

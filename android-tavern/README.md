@@ -166,10 +166,6 @@
 - 打包进 Tavern 的 Android 宿主扩展。
 - 负责主题、通知开关、宿主桥设置项。
 
-### `server-overlay`
-
-- 注入上游 Tavern server payload 的覆盖层。
-
 ### `app/src/main/assets`
 
 - APK 内置静态资产入口。
