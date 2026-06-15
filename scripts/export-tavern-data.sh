@@ -534,6 +534,37 @@ termux_storage_ready() {
     detect_android_shared_output_dir >/dev/null 2>&1
 }
 
+request_termux_storage_access() {
+    if ! is_termux_host_environment; then
+        return 1
+    fi
+    if termux_storage_ready; then
+        return 0
+    fi
+    if ! command -v termux-setup-storage >/dev/null 2>&1; then
+        warn "未检测到 termux-setup-storage，无法自动请求 Android 存储授权。"
+        return 1
+    fi
+
+    # Termux 主环境可以直接弹出系统授权框；proot 内不做这件事，因为授权不会自动把目录挂进 proot。
+    local wait_seconds="${SILLYDROID_EXPORT_STORAGE_SETUP_WAIT_SECONDS:-30}"
+    local elapsed=0
+    warn "未检测到 Termux 共享存储，正在调用 termux-setup-storage 请求 Android 存储授权。"
+    warn "如果手机弹出权限框，请允许访问文件；脚本会等待共享目录创建。"
+    termux-setup-storage >/dev/null 2>&1 || true
+
+    while (( elapsed < wait_seconds )); do
+        if termux_storage_ready; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    warn "等待 ${wait_seconds} 秒后仍未检测到共享存储目录。"
+    return 1
+}
+
 detect_android_shared_output_dir() {
     local candidate override_candidate
     local candidates=()
@@ -1199,7 +1230,13 @@ detect_output_dir() {
     fi
 
     if is_termux_proot_environment; then
-        error "未找到可写的 Android 共享存储目录；Termux proot 请确认 /sdcard/Download 或 /storage/emulated/0/Download 已挂载可写，或用 --output-dir 指定 MT 可见目录。"
+        if [[ -d "$PWD" && -w "$PWD" ]]; then
+            warn "未找到可写的 Android 共享存储目录；将先把压缩包保存到当前 proot 目录。"
+            warn "导出后请退出 proot，回到 Termux 主环境，把该压缩包从 proot rootfs 复制到 Download。"
+            canonical_path "$PWD"
+            return 0
+        fi
+        error "未找到可写的 Android 共享存储目录，当前 proot 目录也不可写。请用 --output-dir 指定可写目录。"
         return 1
     fi
 
@@ -1229,9 +1266,12 @@ ensure_storage_access() {
     fi
 
     if is_termux_host_environment; then
-        warn "Termux 共享存储未就绪，将继续尝试 Termux:API 分享/下载；如需保存到下载目录，请在 Termux 主环境手动执行 termux-setup-storage。"
+        if request_termux_storage_access; then
+            return 0
+        fi
+        warn "Termux 共享存储仍未就绪，将继续尝试 Termux:API 分享/下载。"
     elif is_termux_proot_environment; then
-        warn "Android 共享存储未就绪；Termux proot 请确认 /sdcard/Download 或 /storage/emulated/0/Download 已挂载可写，或用 --output-dir 指定 MT 可见目录。"
+        warn "Android 共享存储未就绪；Termux proot 将在找不到共享目录时保存到当前目录。"
     fi
 }
 
@@ -1295,6 +1335,7 @@ resolve_archive_target() {
     EXPORT_METHOD=''
     ARCHIVE_PATH=''
     EXPORT_LABEL=''
+    EXPORT_NEEDS_TERMUX_COPY_HINT=0
 
     if [[ -n "$explicit_dir" ]]; then
         if ! resolved_output_dir="$(detect_output_dir "$explicit_dir")"; then
@@ -1310,6 +1351,9 @@ resolve_archive_target() {
         EXPORT_METHOD='direct'
         ARCHIVE_PATH="$resolved_output_dir/$archive_name"
         EXPORT_LABEL="$resolved_output_dir"
+        if is_termux_proot_environment && ! detect_android_shared_output_dir >/dev/null 2>&1; then
+            EXPORT_NEEDS_TERMUX_COPY_HINT=1
+        fi
         return 0
     fi
     direct_failure_reason="没有可写输出目录，无法直接保存压缩包。"
@@ -1433,6 +1477,10 @@ publish_archive() {
     case "$EXPORT_METHOD" in
         direct)
             log "导出文件已保存到：$archive_path"
+            if [[ "${EXPORT_NEEDS_TERMUX_COPY_HINT:-0}" == '1' ]]; then
+                log "提示：当前路径在 proot 内，手机文件管理器可能看不到。请退出 proot 回到 Termux 主环境后，把该压缩包从 proot rootfs 复制到 Download。"
+                log "常见目标目录：~/storage/downloads 或 /sdcard/Download"
+            fi
             ;;
         download)
             publish_with_download_manager "$archive_path" "$archive_name"
