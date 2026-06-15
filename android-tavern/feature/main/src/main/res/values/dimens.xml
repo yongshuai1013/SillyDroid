@@ -39,4 +39,8 @@
     <dimen name="sillydroid_feedback_action_min_width">0dp</dimen>
     <dimen name="sillydroid_feedback_image_preview_size">64dp</dimen>
     <dimen name="sillydroid_feedback_image_preview_radius">8dp</dimen>
+    <dimen name="sillydroid_auth_prompt_dialog_padding_horizontal">24dp</dimen>
+    <dimen name="sillydroid_auth_prompt_dialog_padding_vertical">12dp</dimen>
+    <dimen name="sillydroid_auth_prompt_first_field_margin_top">12dp</dimen>
+    <dimen name="sillydroid_auth_prompt_field_spacing">8dp</dimen>
 </resources>

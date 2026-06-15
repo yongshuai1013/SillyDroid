@@ -41,6 +41,13 @@
     <string name="browser_unavailable_open_settings">打开设置</string>
     <string name="browser_unavailable_open_external">在系统浏览器打开</string>
     <string name="geckoview_choice_prompt_title">请选择</string>
+    <string name="http_auth_prompt_title">需要登录</string>
+    <string name="http_auth_prompt_message">%1$s 需要用户名和密码。</string>
+    <string name="http_auth_prompt_message_with_realm">%1$s 需要用户名和密码。\n认证区域：%2$s</string>
+    <string name="http_auth_prompt_unknown_host">当前站点</string>
+    <string name="http_auth_prompt_username_hint">用户名</string>
+    <string name="http_auth_prompt_password_hint">密码</string>
+    <string name="http_auth_prompt_login">登录</string>
     <string name="floating_logs_bubble_description">打开或收起宿主快捷面板</string>
     <string name="floating_logs_panel_title">实时日志</string>
     <string name="floating_logs_panel_close">关闭实时日志悬浮窗</string>

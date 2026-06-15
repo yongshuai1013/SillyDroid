@@ -137,6 +137,14 @@ class TavernGeckoViewHost(
     private var currentUrl: String = ""
     private var configured = false
     private var waitingForInitialPagePaint = false
+    private val httpAuthPromptController by lazy {
+        HttpAuthPromptController(
+            activity = activity,
+            diagnosticSink = HostDiagnosticSink { category, body ->
+                recordHostDiagnostic(category = category, body = body)
+            }
+        )
+    }
 
     override val browserContainer: View
         get() = browserFrame
@@ -303,6 +311,7 @@ class TavernGeckoViewHost(
             category = "geckoview",
             body = "event=destroy_geckoview_started ${currentGeckoDiagnosticState()} ${currentHostMemoryDiagnosticState()}"
         )
+        httpAuthPromptController.dismissActivePrompt(reason = "geckoview_destroy")
         bridgeInstaller.close()
         filePromptUriMaterializer.cleanPreparedFiles()
         runCatching { session.stop() }
@@ -519,6 +528,33 @@ class TavernGeckoViewHost(
                     body = "event=choice_prompt_requested type=${prompt.type} title=${normalizeDiagnosticValue(prompt.title)} message=${normalizeDiagnosticValue(prompt.message)} choiceCount=${prompt.choices.size}"
                 )
                 return showChoicePrompt(prompt)
+            }
+
+            override fun onAuthPrompt(
+                session: GeckoSession,
+                prompt: GeckoSession.PromptDelegate.AuthPrompt
+            ): GeckoResult<GeckoSession.PromptDelegate.PromptResponse>? {
+                recordCriticalHostDiagnostic(
+                    category = "geckoview",
+                    body = "event=auth_prompt_requested title=${normalizeDiagnosticValue(prompt.title)} uri=${normalizeDiagnosticValue(prompt.authOptions.uri)}"
+                )
+                val result = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>()
+                httpAuthPromptController.show(
+                    HttpAuthPromptRequest(
+                        source = "geckoview",
+                        host = prompt.authOptions.uri,
+                        realm = prompt.title ?: prompt.message,
+                        initialUsername = prompt.authOptions.username,
+                        initialPassword = prompt.authOptions.password,
+                        onConfirm = { credentials ->
+                            result.complete(prompt.confirm(credentials.username, credentials.password))
+                        },
+                        onCancel = {
+                            result.complete(prompt.dismiss())
+                        }
+                    )
+                )
+                return result
             }
 
             override fun onFilePrompt(

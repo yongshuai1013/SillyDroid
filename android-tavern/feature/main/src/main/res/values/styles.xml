@@ -26,6 +26,30 @@
         <item name="android:textSize">10sp</item>
     </style>
 
+    <style name="TextAppearance.SillyDroid.AuthPromptBody" parent="TextAppearance.MaterialComponents.Body2">
+        <item name="android:textSize">13sp</item>
+        <item name="android:lineSpacingExtra">2sp</item>
+    </style>
+
+    <style name="Widget.SillyDroid.MainTextInputLayout.OutlinedBox" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeWidth">1dp</item>
+        <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="boxCollapsedPaddingTop">2dp</item>
+        <item name="boxCornerRadiusTopStart">@dimen/sillydroid_nested_card_radius</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/sillydroid_nested_card_radius</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/sillydroid_nested_card_radius</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/sillydroid_nested_card_radius</item>
+    </style>
+
+    <style name="Widget.SillyDroid.MainTextInputEditText" parent="Widget.MaterialComponents.TextInputEditText.OutlinedBox">
+        <item name="android:minHeight">@dimen/sillydroid_input_min_height</item>
+        <item name="android:paddingStart">@dimen/sillydroid_control_padding_horizontal</item>
+        <item name="android:paddingEnd">@dimen/sillydroid_control_padding_horizontal</item>
+        <item name="android:paddingTop">@dimen/sillydroid_control_padding_vertical</item>
+        <item name="android:paddingBottom">@dimen/sillydroid_control_padding_vertical</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
     <style name="Widget.SillyDroid.FloatingLogsCompactButton" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:minHeight">@dimen/sillydroid_floating_logs_compact_control_height</item>
         <item name="android:minWidth">@dimen/sillydroid_floating_logs_compact_control_min_width</item>

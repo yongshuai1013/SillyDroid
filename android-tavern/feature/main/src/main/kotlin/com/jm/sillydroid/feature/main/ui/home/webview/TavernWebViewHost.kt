@@ -113,6 +113,14 @@ class TavernWebViewHost(
     private var rendererRecoveryActivityRecreateScheduled = false
     private var lastVolatileWebViewCacheClearElapsedMs = -1L
     private val webReloadTracer by lazy { WebReloadTracer(LOG_TAG) }
+    private val httpAuthPromptController by lazy {
+        HttpAuthPromptController(
+            activity = activity,
+            diagnosticSink = HostDiagnosticSink { category, body ->
+                recordHostDiagnostic(category = category, body = body)
+            }
+        )
+    }
 
     private val homeWebViewController by lazy {
         HomeWebViewController(
@@ -126,6 +134,7 @@ class TavernWebViewHost(
             onPageCommitVisible = ::handleWebViewPageCommitVisible,
             onPageFinished = ::handleWebViewPageFinished,
             isLocalTavernUrl = ::isLocalTavernUrl,
+            onHttpAuthRequest = httpAuthPromptController::show,
             onMainFrameLocalLoadError = ::scheduleLocalWebViewRetry,
             onRendererGone = ::handleWebViewRendererGone,
             onDownloadRequested = onDownloadRequested,
@@ -338,6 +347,7 @@ class TavernWebViewHost(
         uninstallDebugRendererCrashReceiver()
         webDocumentStartScriptController?.close()
         webDocumentStartScriptController = null
+        httpAuthPromptController.dismissActivePrompt(reason = "webview_destroy")
         bridgeInstaller.close()
         destroyWebViewForActivityTeardown()
     }

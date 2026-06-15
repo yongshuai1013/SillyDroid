@@ -7,6 +7,9 @@
             统一所有 MaterialAlertDialogBuilder(activity) 的弹窗外观：圆角、按钮、标题/正文字号都从这里抽。
             这样无需改 ~20 处 call site，新增弹窗也自动跟随同一套视觉。
         -->
+        <item name="textInputStyle">@style/Widget.SillyDroid.MainTextInputLayout.OutlinedBox</item>
+        <item name="android:editTextStyle">@style/Widget.SillyDroid.MainTextInputEditText</item>
+        <item name="editTextStyle">@style/Widget.SillyDroid.MainTextInputEditText</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.SillyDroid.MaterialAlertDialog.MaterialComponents</item>
     </style>
 

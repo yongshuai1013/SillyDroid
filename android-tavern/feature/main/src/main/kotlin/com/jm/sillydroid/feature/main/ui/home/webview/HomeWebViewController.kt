@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Message
 import android.webkit.ConsoleMessage
+import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebSettings
@@ -38,6 +39,7 @@ class HomeWebViewController(
     private val onPageCommitVisible: (WebView, String?) -> Unit,
     private val onPageFinished: (WebView, String?) -> Unit,
     private val isLocalTavernUrl: (String) -> Boolean,
+    private val onHttpAuthRequest: (HttpAuthPromptRequest) -> Unit = { request -> request.onCancel() },
     private val onMainFrameLocalLoadError: (WebViewLocalLoadErrorInfo) -> Unit,
     private val onRendererGone: (WebViewRendererGoneInfo) -> Unit,
     private val onDownloadRequested: (BrowserDownloadRequest) -> Unit,
@@ -183,6 +185,29 @@ class HomeWebViewController(
                 writeJsErrorLine(
                     category = "http-error",
                     body = "$mainFrameTag method=${request.method} status=${errorResponse.statusCode} url=$failingUrl reason=${errorResponse.reasonPhrase.orEmpty()}"
+                )
+            }
+
+            override fun onReceivedHttpAuthRequest(
+                view: WebView?,
+                handler: HttpAuthHandler?,
+                host: String?,
+                realm: String?
+            ) {
+                if (handler == null) return
+                // WebView 默认实现会直接取消 HTTP Basic Auth challenge；宿主必须主动接住并把凭据交回内核。
+                onHttpAuthRequest(
+                    HttpAuthPromptRequest(
+                        source = "webview",
+                        host = host,
+                        realm = realm,
+                        onConfirm = { credentials ->
+                            handler.proceed(credentials.username, credentials.password)
+                        },
+                        onCancel = {
+                            handler.cancel()
+                        }
+                    )
                 )
             }
 
