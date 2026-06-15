@@ -11,35 +11,127 @@ usage() {
 EOF
 }
 
-ensure_termux_package_installed() {
+is_termux_environment_marker() {
+    if [[ -n "${TERMUX_VERSION:-}" ]]; then
+        return 0
+    fi
+    if [[ "${PREFIX:-}" == */data/data/com.termux/files/usr ]]; then
+        return 0
+    fi
+    if [[ -d /data/data/com.termux/files/home || -d /data/data/com.termux/files/usr ]]; then
+        return 0
+    fi
+    if command -v termux-setup-storage >/dev/null 2>&1 || command -v termux-share >/dev/null 2>&1 || command -v termux-download >/dev/null 2>&1; then
+        return 0
+    fi
+    if has_linux_distribution_release && is_android_mobile_environment; then
+        return 0
+    fi
+    return 1
+}
+
+is_android_mobile_environment() {
+    if [[ -d /sdcard || -d /storage/emulated/0 ]]; then
+        return 0
+    fi
+    if [[ "$(uname -o 2>/dev/null || true)" == "Android" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+has_linux_distribution_release() {
+    if [[ -f /etc/os-release ]]; then
+        return 0
+    fi
+    if [[ -f /etc/debian_version || -f /etc/redhat-release || -f /etc/centos-release || -f /etc/fedora-release || -f /etc/alpine-release ]]; then
+        return 0
+    fi
+    return 1
+}
+
+describe_device_platform() {
+    if is_termux_environment_marker || is_android_mobile_environment; then
+        printf 'Android 移动端'
+        return 0
+    fi
+
+    printf 'Linux / 容器'
+}
+
+has_distribution_package_manager() {
+    command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1
+}
+
+is_termux_proot_environment() {
+    is_termux_environment_marker || return 1
+    local termux_home
+    termux_home="$(termux_home_path)"
+    if [[ "${HOME:-}" == "$termux_home" || "${HOME:-}" == "$termux_home/"* ]]; then
+        return 1
+    fi
+
+    # 先确认属于 Termux/Android，再用 HOME 与发行版包管理器区分 proot，避免把 CentOS/Fedora proot 当成 Termux 主环境。
+    has_linux_distribution_release || has_distribution_package_manager
+}
+
+is_termux_host_environment() {
+    is_termux_environment_marker || return 1
+    if is_termux_proot_environment; then
+        return 1
+    fi
+    return 0
+}
+
+install_package_for_command() {
     local package_name="$1"
     local command_name="${2:-$1}"
+    local apt_package_name="${3:-$package_name}"
+    local rpm_package_name="${4:-$apt_package_name}"
 
     if command -v "$command_name" >/dev/null 2>&1; then
         return 0
     fi
 
-    if command -v pkg >/dev/null 2>&1; then
+    if is_termux_host_environment; then
         log "未检测到 $command_name，正在自动安装：pkg install -y $package_name"
         pkg install -y "$package_name" >/dev/null || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        log "未检测到 $command_name，正在自动安装：apt-get install -y $apt_package_name"
+        DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$apt_package_name" >/dev/null || true
+    elif command -v apt >/dev/null 2>&1; then
+        log "未检测到 $command_name，正在自动安装：apt install -y $apt_package_name"
+        DEBIAN_FRONTEND=noninteractive apt update >/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt install -y "$apt_package_name" >/dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then
+        log "未检测到 $command_name，正在自动安装：dnf install -y $rpm_package_name"
+        dnf install -y "$rpm_package_name" >/dev/null || true
+    elif command -v yum >/dev/null 2>&1; then
+        log "未检测到 $command_name，正在自动安装：yum install -y $rpm_package_name"
+        yum install -y "$rpm_package_name" >/dev/null || true
     fi
 
     command -v "$command_name" >/dev/null 2>&1
 }
 
 ensure_zip_available() {
-    if ! ensure_termux_package_installed zip zip; then
-        error "缺少 zip 命令，且自动安装失败。Termux 可执行：pkg install zip；普通系统请用对应发行版的安装命令。"
+    if ! install_package_for_command zip zip zip; then
+        error "缺少 zip 命令，且自动安装失败。Termux 主环境可执行：pkg install zip；proot/Linux 请按发行版执行 apt/dnf/yum install zip。"
         exit 1
     fi
 }
 
 ensure_termux_api_tools_available() {
+    if ! is_termux_host_environment; then
+        return 1
+    fi
+
     if command -v termux-download >/dev/null 2>&1 && command -v termux-share >/dev/null 2>&1; then
         return 0
     fi
 
-    ensure_termux_package_installed termux-api termux-download || true
+    install_package_for_command termux-api termux-download termux-api || true
 
     command -v termux-download >/dev/null 2>&1 || command -v termux-share >/dev/null 2>&1
 }
@@ -49,7 +141,7 @@ ensure_python_available() {
         return 0
     fi
 
-    ensure_termux_package_installed python python || true
+    install_package_for_command python python python3 || true
 
     find_python_command >/dev/null 2>&1
 }
@@ -396,25 +488,23 @@ read_tty_key() {
 }
 
 is_termux_environment() {
-    if [[ -n "${TERMUX_VERSION:-}" ]]; then
-        return 0
-    fi
-    if [[ "${PREFIX:-}" == */data/data/com.termux/files/usr ]]; then
-        return 0
-    fi
-    if command -v termux-setup-storage >/dev/null 2>&1 || command -v termux-share >/dev/null 2>&1 || command -v termux-download >/dev/null 2>&1; then
-        return 0
-    fi
-    return 1
+    is_termux_environment_marker
 }
 
 describe_runtime_environment() {
-    if is_termux_environment; then
+    if is_termux_proot_environment; then
+        printf 'Termux proot'
+        return 0
+    fi
+    if is_termux_host_environment; then
         printf 'Termux 主环境'
         return 0
     fi
+    printf 'Linux'
+}
 
-    printf '普通系统 / 容器'
+describe_environment_summary() {
+    describe_runtime_environment
 }
 
 canonical_path() {
@@ -441,11 +531,62 @@ termux_home_path() {
 }
 
 termux_storage_ready() {
-    local termux_home
-    termux_home="$(termux_home_path)"
+    detect_android_shared_output_dir >/dev/null 2>&1
+}
 
-    [[ -d "${HOME:-}/storage/shared" ]] && return 0
-    [[ -d "$termux_home/storage/shared" ]] && return 0
+detect_android_shared_output_dir() {
+    local candidate override_candidate
+    local candidates=()
+
+    # 允许测试或特殊 proot 挂载用冒号分隔的候选目录覆盖默认扫描；
+    # 正常 Android/Termux 用户仍走下面的标准共享存储路径。
+    if [[ -n "${SILLYTAVERN_EXPORT_ANDROID_SHARED_DIRS:-}" ]]; then
+        while IFS= read -r override_candidate; do
+            [[ -n "$override_candidate" ]] || continue
+            candidates+=("$override_candidate")
+        done < <(printf '%s\n' "${SILLYTAVERN_EXPORT_ANDROID_SHARED_DIRS//:/$'\n'}")
+    fi
+
+    candidates+=(
+        "/sdcard/Download"
+        "/storage/emulated/0/Download"
+        "/sdcard"
+        "/storage/emulated/0"
+        "${HOME:-}/storage/shared/Download"
+        "${HOME:-}/storage/downloads"
+        "${HOME:-}/storage/shared"
+    )
+
+    if is_termux_environment_marker; then
+        local termux_home
+        termux_home="$(termux_home_path)"
+        candidates+=(
+            "$termux_home/storage/shared/Download"
+            "$termux_home/storage/downloads"
+            "$termux_home/storage/shared"
+        )
+    fi
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -d "$candidate" && -w "$candidate" ]]; then
+            canonical_path "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+default_temp_parent_dir() {
+    local candidate
+    for candidate in "${TMPDIR:-}" "${PREFIX:-}" /tmp .; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -d "$candidate" && -w "$candidate" ]]; then
+            canonical_path "$candidate"
+            return 0
+        fi
+    done
+
     return 1
 }
 
@@ -1051,29 +1192,23 @@ detect_output_dir() {
         return 1
     fi
 
-    local candidate termux_home
-    for candidate in "${HOME:-}/storage/shared/Download" "${HOME:-}/storage/downloads" "${HOME:-}/storage/shared"; do
-        if [[ -d "$candidate" && -w "$candidate" ]]; then
-            canonical_path "$candidate"
-            return 0
-        fi
-    done
+    local resolved_android_output_dir
+    if resolved_android_output_dir="$(detect_android_shared_output_dir)"; then
+        printf '%s\n' "$resolved_android_output_dir"
+        return 0
+    fi
 
-    if is_termux_environment; then
-        termux_home="$(termux_home_path)"
-        # proot-distro 里 HOME 常是 /root，但宿主 Termux 下载目录仍挂在 /data/data/com.termux/files/home 下。
-        for candidate in "$termux_home/storage/shared/Download" "$termux_home/storage/downloads" "$termux_home/storage/shared"; do
-            if [[ -d "$candidate" && -w "$candidate" ]]; then
-                canonical_path "$candidate"
-                return 0
-            fi
-        done
-
-        error "未找到可写的 Termux 共享存储目录，将继续尝试 Termux:API 发布方式。"
+    if is_termux_proot_environment; then
+        error "未找到可写的 Android 共享存储目录；Termux proot 请确认 /sdcard/Download 或 /storage/emulated/0/Download 已挂载可写，或用 --output-dir 指定 MT 可见目录。"
         return 1
     fi
 
-    # 普通系统和容器允许直接把压缩包落到当前目录；Termux 不走这里，避免 proot/root 下误保存到 /root。
+    if is_termux_host_environment; then
+        warn "未找到可写的 Android 共享存储目录，将继续尝试 Termux:API 分享/下载；如需保存到下载目录，请在 Termux 主环境执行 termux-setup-storage。"
+        return 1
+    fi
+
+    # 普通 Linux 和非 Android 容器允许直接把压缩包落到当前目录；Android proot 不走这里，避免误保存到 /root。
     if [[ -d "$PWD" && -w "$PWD" ]]; then
         canonical_path "$PWD"
         return 0
@@ -1093,8 +1228,10 @@ ensure_storage_access() {
         return 0
     fi
 
-    if is_termux_environment; then
+    if is_termux_host_environment; then
         warn "Termux 共享存储未就绪，将继续尝试 Termux:API 分享/下载；如需保存到下载目录，请在 Termux 主环境手动执行 termux-setup-storage。"
+    elif is_termux_proot_environment; then
+        warn "Android 共享存储未就绪；Termux proot 请确认 /sdcard/Download 或 /storage/emulated/0/Download 已挂载可写，或用 --output-dir 指定 MT 可见目录。"
     fi
 }
 
@@ -1178,12 +1315,24 @@ resolve_archive_target() {
     direct_failure_reason="没有可写输出目录，无法直接保存压缩包。"
     warn "直接保存不可用：$direct_failure_reason"
 
+    if is_termux_proot_environment; then
+        error "无法直接保存导出文件：$direct_failure_reason"
+        error "Termux proot 不启用 Termux:API 分享/下载回退；请确认 /sdcard/Download 或 /storage/emulated/0/Download 可写，或使用 --output-dir 指定 MT 可见目录。"
+        return 1
+    fi
+
+    if ! is_termux_host_environment; then
+        error "无法直接保存导出文件：$direct_failure_reason"
+        error "Linux 请在可写目录运行脚本，或使用 --output-dir 指定输出目录。"
+        return 1
+    fi
+
     local export_cache_dir="$HOME/.sillytavern/export-cache"
     mkdir -p "$export_cache_dir"
 
     ensure_termux_api_tools_available || true
 
-    if command -v termux-share >/dev/null 2>&1; then
+    if is_termux_host_environment && command -v termux-share >/dev/null 2>&1; then
         warn "回退方案：使用 Android 系统分享面板。原因：$direct_failure_reason"
         if confirm_export_method "是否使用系统分享面板导出？选择 N 将继续尝试最后的系统下载服务方案。"; then
             EXPORT_METHOD='share'
@@ -1198,7 +1347,7 @@ resolve_archive_target() {
 
     ensure_python_available || true
 
-    if command -v termux-download >/dev/null 2>&1 && find_python_command >/dev/null 2>&1; then
+    if is_termux_host_environment && command -v termux-download >/dev/null 2>&1 && find_python_command >/dev/null 2>&1; then
         warn "最后回退方案：使用 Android 系统下载服务。原因：无法直接保存，且未使用系统分享面板。"
         if confirm_export_method "是否使用系统下载服务导出？选择 N 将中止导出。"; then
             EXPORT_METHOD='download'
@@ -1209,6 +1358,7 @@ resolve_archive_target() {
         warn "用户选择不使用系统下载服务。"
     else
         local missing_download_reasons=()
+        is_termux_host_environment || missing_download_reasons+=("当前不是 Termux")
         command -v termux-download >/dev/null 2>&1 || missing_download_reasons+=("未检测到 termux-download")
         find_python_command >/dev/null 2>&1 || missing_download_reasons+=("未检测到 python/python3")
         warn "系统下载服务不可用：$(IFS='；'; printf '%s' "${missing_download_reasons[*]}")。如果刚才自动安装 termux-api 成功但仍不可用，请确认已安装 Android 端 Termux:API 应用。"
@@ -1330,12 +1480,30 @@ copy_config_payload() {
     mkdir -p "$target_dir"
     if [[ -d "$config_dir" ]]; then
         cp -a "$config_dir"/. "$target_dir"/
-        return 0
     fi
 
     if [[ -f "$config_file" ]]; then
+        # 宿主导入契约要求导出包里始终有 config/config.yaml；新版根配置要物化到这个位置。
         cp -a "$config_file" "$target_dir/config.yaml"
         return 0
+    fi
+}
+
+validate_payload_before_archive() {
+    local stage_root="$1"
+    local required_dir
+    local -a required_dirs=(config data plugins public)
+
+    for required_dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$stage_root/$required_dir" ]]; then
+            error "导出包结构不完整：缺少 $required_dir/ 目录。"
+            return 1
+        fi
+    done
+
+    if [[ ! -f "$stage_root/config/config.yaml" ]]; then
+        error "导出包结构不完整：缺少 config/config.yaml。"
+        return 1
     fi
 }
 
@@ -1391,7 +1559,7 @@ main() {
 
     print_banner
     log "$(color_text "$COLOR_CYAN" "开始导出 SillyTavern 数据")"
-    log "运行环境：$(color_text "$COLOR_MAGENTA" "$(describe_runtime_environment)")"
+    log "运行环境：$(color_text "$COLOR_MAGENTA" "$(describe_environment_summary)")"
 
     ensure_zip_available
 
@@ -1428,7 +1596,7 @@ main() {
 
     step "准备临时目录"
     local temp_root stage_root
-    temp_root="$(mktemp -d "${TMPDIR:-${PREFIX:-/tmp}}/st-export.XXXXXX")"
+    temp_root="$(mktemp -d "$(default_temp_parent_dir)/st-export.XXXXXX")"
     stage_root="$temp_root/payload"
     mkdir -p "$stage_root/config" "$stage_root/data" "$stage_root/plugins" "$stage_root/public"
 
@@ -1445,6 +1613,9 @@ main() {
 
     step "拷贝扩展"
     copy_extensions_payload "$install_root" "$stage_root/public"
+
+    step "校验导出结构"
+    validate_payload_before_archive "$stage_root"
 
     step "正在打包压缩包"
     (
