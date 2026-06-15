@@ -54,6 +54,17 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
         val visibleRootDirectory = if (parentDocumentId.isServerDocumentId()) tavernServerDirectory() else rootDirectory
         return MatrixCursor(resolveDocumentProjection(projection)).apply {
             if (parentDocumentId == rootDocumentId) {
+                val rootConfigFile = tavernRootConfigFile()
+                if (rootConfigFile.isFile) {
+                    // SAF 根层直接给出真实根 config.yaml，避免用户先钻进 legacy config 目录。
+                    includeDocument(
+                        TavernDocument(
+                            file = rootConfigFile,
+                            documentId = rootConfigDocumentId,
+                            displayName = rootConfigFileName
+                        )
+                    )
+                }
                 includeDocument(
                     TavernDocument(
                         file = tavernServerDirectory().apply { mkdirs() },
@@ -134,6 +145,9 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     }
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
+        if (parentDocumentId == rootDocumentId && documentId == rootConfigDocumentId) {
+            return true
+        }
         if (parentDocumentId == rootDocumentId && documentId.isServerDocumentId()) {
             return true
         }
@@ -151,10 +165,12 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     private fun MatrixCursor.includeDocument(document: TavernDocument) {
         val file = document.file
         val isRoot = document.documentId == rootDocumentId
+        val isRootConfig = document.documentId == rootConfigDocumentId
         val isServerRoot = document.documentId == serverRootDocumentId
         val isDirectory = file.isDirectory
         val flags = when {
             isRoot -> Document.FLAG_DIR_SUPPORTS_CREATE
+            isRootConfig -> Document.FLAG_SUPPORTS_WRITE
             isServerRoot -> 0
             isDirectory -> Document.FLAG_DIR_SUPPORTS_CREATE or
                 Document.FLAG_SUPPORTS_DELETE or
@@ -168,7 +184,11 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
             add(Document.COLUMN_DOCUMENT_ID, document.documentId)
             add(
                 Document.COLUMN_DISPLAY_NAME,
-                if (isRoot) contextOrThrow().getString(R.string.tavern_data_documents_root_title) else document.displayName
+                when {
+                    isRoot -> contextOrThrow().getString(R.string.tavern_data_documents_root_title)
+                    isRootConfig -> rootConfigFileName
+                    else -> document.displayName
+                }
             )
             add(Document.COLUMN_SIZE, if (isDirectory) null else file.length())
             add(Document.COLUMN_MIME_TYPE, if (isDirectory) Document.MIME_TYPE_DIR else mimeTypeFor(file))
@@ -178,7 +198,7 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     }
 
     private fun tavernRootDirectory(): File {
-        // MT/SAF 入口面向高级用户，直接暴露运行时 APP_DATA_ROOT，根层应是 config/data/plugins/extensions。
+        // MT/SAF 入口面向高级用户，直接暴露运行时 APP_DATA_ROOT；根层额外虚拟展示真实 config.yaml。
         return hostPaths().serverDataDir
     }
 
@@ -193,8 +213,10 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     private fun resolveDocumentFile(documentId: String): File {
         val rootDirectory = tavernRootDirectory().apply { mkdirs() }.absoluteFile
         val file = resolveDocumentFileUnchecked(documentId, rootDirectory)
+        val rootConfigFile = tavernRootConfigFile().absoluteFile
+        val isRootConfigDocument = documentId == rootConfigDocumentId
 
-        if (!isInsidePath(rootDirectory, file.absoluteFile)) {
+        if (!isRootConfigDocument && !isInsidePath(rootDirectory, file.absoluteFile)) {
             if (!documentId.isServerDocumentId()) {
                 throw FileNotFoundException("Document escapes Tavern root: $documentId")
             }
@@ -204,7 +226,10 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
         if (!isInsideAccessibleRoot(canonicalFile)) {
             throw FileNotFoundException("Document escapes Tavern root: $documentId")
         }
-        if (!isVisibleDocument(documentId, if (documentId.isServerDocumentId()) tavernServerDirectory() else rootDirectory, file)) {
+        if (canonicalFile == rootConfigFile && !isRootConfigDocument) {
+            throw FileNotFoundException("Document is hidden from this provider: $documentId")
+        }
+        if (!isRootConfigDocument && !isVisibleDocument(documentId, if (documentId.isServerDocumentId()) tavernServerDirectory() else rootDirectory, file)) {
             throw FileNotFoundException("Document is hidden from this provider: $documentId")
         }
         if (!file.exists()) {
@@ -216,6 +241,7 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     private fun resolveDocumentFileUnchecked(documentId: String, rootDirectory: File): File {
         return when {
             documentId == rootDocumentId -> rootDirectory
+            documentId == rootConfigDocumentId -> tavernRootConfigFile().absoluteFile
             documentId.startsWith("$rootDocumentId/") -> {
                 val relativePath = documentId.removePrefix("$rootDocumentId/")
                 if (relativePath.isBlank()) rootDirectory else File(rootDirectory, relativePath)
@@ -238,6 +264,8 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
         val absoluteFile = file.absoluteFile
         return if (absoluteFile == rootDirectory) {
             rootDocumentId
+        } else if (absoluteFile == tavernRootConfigFile().absoluteFile) {
+            rootConfigDocumentId
         } else if (absoluteFile == tavernServerDirectory().absoluteFile) {
             serverRootDocumentId
         } else if (isInsidePath(tavernServerDirectory().absoluteFile, absoluteFile)) {
@@ -251,16 +279,22 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
         return TavernDocument(
             file = file,
             documentId = documentId,
-            displayName = if (documentId == serverRootDocumentId) {
-                contextOrThrow().getString(R.string.tavern_data_documents_server_root_title)
-            } else {
-                file.name
+            displayName = when (documentId) {
+                serverRootDocumentId -> contextOrThrow().getString(R.string.tavern_data_documents_server_root_title)
+                rootConfigDocumentId -> rootConfigFileName
+                else -> {
+                    file.name
+                }
             }
         )
     }
 
     private fun isProtectedDocument(documentId: String, file: File): Boolean {
-        return file.absoluteFile == tavernRootDirectory().absoluteFile || documentId == serverRootDocumentId
+        val rootConfigFile = tavernRootConfigFile().absoluteFile
+        return file.absoluteFile == tavernRootDirectory().absoluteFile ||
+            file.absoluteFile == rootConfigFile ||
+            documentId == serverRootDocumentId ||
+            documentId == rootConfigDocumentId
     }
 
     private fun isVisibleDocument(documentId: String, rootDirectory: File, file: File): Boolean {
@@ -278,7 +312,8 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
 
         val relativePath = file.absoluteFile.relativeTo(rootDirectory.absoluteFile).invariantSeparatorsPath
         val topLevelName = relativePath.substringBefore('/')
-        return documentId.isServerDocumentId() || topLevelName != ".sillydroid-maintenance"
+        return documentId.isServerDocumentId() ||
+            (topLevelName != ".sillydroid-maintenance" && topLevelName != legacyConfigDirectoryName)
     }
 
     private fun isInsideAccessibleRoot(file: File): Boolean {
@@ -290,6 +325,10 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
 
     private fun tavernServerDirectory(): File {
         return hostPaths().serverDir
+    }
+
+    private fun tavernRootConfigFile(): File {
+        return File(tavernServerDirectory(), rootConfigFileName)
     }
 
     private fun isInsidePath(parent: File, child: File): Boolean {
@@ -316,7 +355,7 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
 
     private fun uniqueTarget(parent: File, displayName: String): File {
         val directTarget = File(parent, displayName)
-        if (!directTarget.exists()) {
+        if (!isReservedRootDisplayName(parent, directTarget.name) && !directTarget.exists()) {
             return directTarget
         }
 
@@ -327,12 +366,17 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
 
         for (index in 1..9999) {
             val candidate = File(parent, "$baseName ($index)$extension")
-            if (!candidate.exists()) {
+            if (!isReservedRootDisplayName(parent, candidate.name) && !candidate.exists()) {
                 return candidate
             }
         }
 
         throw FileNotFoundException("Failed to allocate unique document name: $displayName")
+    }
+
+    private fun isReservedRootDisplayName(parent: File, displayName: String): Boolean {
+        // 根层 config.yaml 是真实配置的快捷入口，不能被当成普通数据文件创建出来。
+        return parent.absoluteFile == tavernRootDirectory().absoluteFile && displayName == rootConfigFileName
     }
 
     private fun mimeTypeFor(file: File): String {
@@ -360,6 +404,9 @@ class TavernDataDocumentsProvider : DocumentsProvider() {
     private companion object {
         private const val rootId = "sillydroid-tavern-data"
         private const val rootDocumentId = "root"
+        private const val rootConfigDocumentId = "root-config"
+        private const val rootConfigFileName = "config.yaml"
+        private const val legacyConfigDirectoryName = "config"
         private const val serverRootDocumentId = "tavern-server"
 
         private val defaultRootProjection = arrayOf(

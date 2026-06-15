@@ -64,6 +64,14 @@ class HomeWebViewControllerTest {
                 activityDestroyed = false
             )
         )
+        assertEquals(
+            null,
+            resolveRendererGoneAutoUploadCrashType(
+                info = info,
+                activityFinishing = true,
+                activityDestroyed = false
+            )
+        )
     }
 
     @Test
@@ -77,6 +85,14 @@ class HomeWebViewControllerTest {
                 activityDestroyed = true
             )
         )
+        assertEquals(
+            "webview-renderer-crash",
+            resolveRendererGoneAutoUploadCrashType(
+                info = info,
+                activityFinishing = true,
+                activityDestroyed = true
+            )
+        )
     }
 
     @Test
@@ -85,6 +101,14 @@ class HomeWebViewControllerTest {
 
         assertTrue(
             shouldAutoUploadRendererGoneBundle(
+                info = info,
+                activityFinishing = false,
+                activityDestroyed = false
+            )
+        )
+        assertEquals(
+            "webview-renderer-non-crash-exit",
+            resolveRendererGoneAutoUploadCrashType(
                 info = info,
                 activityFinishing = false,
                 activityDestroyed = false

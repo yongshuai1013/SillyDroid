@@ -341,6 +341,22 @@ internal fun shouldAutoUploadRendererGoneBundle(
     return info.didCrash || (!activityFinishing && !activityDestroyed)
 }
 
+internal fun resolveRendererGoneAutoUploadCrashType(
+    info: WebViewRendererGoneInfo,
+    activityFinishing: Boolean,
+    activityDestroyed: Boolean
+): String? {
+    if (!shouldAutoUploadRendererGoneBundle(info, activityFinishing, activityDestroyed)) {
+        return null
+    }
+    return if (info.didCrash) {
+        "webview-renderer-crash"
+    } else {
+        // App 未退出但 renderer 非崩溃退出会造成白屏/重建，属于浏览器事件，不归类为 App crash。
+        "webview-renderer-non-crash-exit"
+    }
+}
+
 data class WebViewLocalLoadErrorInfo(
     val failingUrl: String,
     val method: String,

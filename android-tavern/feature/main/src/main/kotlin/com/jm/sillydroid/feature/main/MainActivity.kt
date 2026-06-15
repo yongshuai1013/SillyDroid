@@ -46,6 +46,7 @@ import com.jm.sillydroid.feature.main.ui.home.webview.TavernWebViewHost
 import com.jm.sillydroid.feature.main.ui.home.webview.UnavailableBrowserHost
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRendererGoneInfo
 import com.jm.sillydroid.feature.main.ui.home.webview.WebViewRuntimeCompatibility
+import com.jm.sillydroid.feature.main.ui.home.webview.resolveRendererGoneAutoUploadCrashType
 import com.jm.sillydroid.feature.main.ui.home.webview.shouldAutoUploadRendererGoneBundle
 import com.jm.sillydroid.feature.main.ui.home.webview.toDiagnosticText
 import kotlinx.coroutines.launch
@@ -482,7 +483,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun uploadRendererGoneLogBundle(info: WebViewRendererGoneInfo) {
-        if (!shouldAutoUploadRendererGoneBundle(info, activityFinishing = isFinishing, activityDestroyed = isDestroyed)) {
+        val crashType = resolveRendererGoneAutoUploadCrashType(
+            info = info,
+            activityFinishing = isFinishing,
+            activityDestroyed = isDestroyed
+        )
+        if (crashType == null) {
             recordDefaultHostDiagnostic(
                 category = "log_upload",
                 body = "event=auto_upload_skipped reason=renderer_cleanup_noise trigger=webview_renderer_gone didCrash=${info.didCrash} activityFinishing=$isFinishing activityDestroyed=$isDestroyed"
@@ -507,17 +513,18 @@ class MainActivity : AppCompatActivity() {
 
         val uploadKey = rendererGoneAutoUploadKey()
         hostConfigStore.pendingRendererGoneAutoUploadKey = uploadKey
-        hostConfigStore.pendingRendererGoneAutoUploadCrashType = if (info.didCrash) {
-            "webview-renderer-crash"
-        } else {
-            "webview-renderer-gone"
-        }
+        hostConfigStore.pendingRendererGoneAutoUploadCrashType = crashType
         // renderer gone 发生后系统写入 ApplicationExitInfo/tombstone 可能延迟；
         // 这里只记录待上传标志，下一次启动再打包，避免太早上传导致关键 native 退出信息缺失。
-        hostConfigStore.pendingRendererGoneAutoUploadNotes = info.toDiagnosticText()
+        hostConfigStore.pendingRendererGoneAutoUploadNotes = buildString {
+            append(info.toDiagnosticText())
+            append(" activityFinishing=$isFinishing")
+            append(" activityDestroyed=$isDestroyed")
+            append(" appSurfaceExiting=${isFinishing || isDestroyed}")
+        }
         recordDefaultHostDiagnostic(
             category = "log_upload",
-            body = "event=auto_upload_mark_pending trigger=webview_renderer_gone key=$uploadKey didCrash=${info.didCrash} uploadOnNextStart=true"
+            body = "event=auto_upload_mark_pending trigger=webview_renderer_gone key=$uploadKey crashType=$crashType didCrash=${info.didCrash} activityFinishing=$isFinishing activityDestroyed=$isDestroyed uploadOnNextStart=true"
         )
     }
 
