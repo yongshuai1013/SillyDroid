@@ -30,6 +30,7 @@ import com.jm.sillydroid.feature.main.model.download.DownloadFailureReport
 import com.jm.sillydroid.feature.main.ui.home.bridge.BrowserHostBridgeNames
 import com.jm.sillydroid.feature.main.ui.home.download.BlobDownloadController
 import com.jm.sillydroid.feature.main.ui.home.download.BrowserDownloadController
+import com.jm.sillydroid.feature.main.ui.home.notification.AndroidSystemAlertSoundPlayer
 import com.jm.sillydroid.feature.main.ui.home.notification.SystemNotificationController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -107,7 +108,8 @@ class HostIoController(
     val systemNotificationController: SystemNotificationController by lazy {
         SystemNotificationController(
             hostNotificationService = hostNotificationService,
-            smallIconResId = android.R.drawable.stat_notify_chat
+            smallIconResId = android.R.drawable.stat_notify_chat,
+            alertSoundPlayer = AndroidSystemAlertSoundPlayer(activity)
         )
     }
 

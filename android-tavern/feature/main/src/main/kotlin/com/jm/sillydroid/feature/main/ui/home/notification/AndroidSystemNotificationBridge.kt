@@ -9,6 +9,14 @@ class AndroidSystemNotificationBridge(
     private val requestNotificationPermission: () -> Unit
 ) {
     @JavascriptInterface
+    fun playAlertSound(): Boolean {
+        if (!isHostActive()) {
+            return false
+        }
+        return notificationController.playAlertSound()
+    }
+
+    @JavascriptInterface
     fun showNotification(payload: String?): Boolean {
         if (!isHostActive()) {
             return false

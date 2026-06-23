@@ -75,7 +75,6 @@ const themePerformanceOptions = new Set(themePerformanceChoices.map(choice => ch
 const themeColorPattern = /^#[\da-f]{6}$/i;
 
 let messageAlertHandler = null;
-let notificationAudioContext = null;
 let androidMultipleSelect2RestoreTimer = null;
 const androidMultipleSelect2NoKeyboardBoundSelects = new WeakSet();
 
@@ -858,64 +857,14 @@ function showSystemMessageNotification() {
     }));
 }
 
-function getNotificationAudioContext() {
-    const AudioContextConstructor = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!AudioContextConstructor) {
-        return null;
-    }
-
-    if (!notificationAudioContext) {
-        notificationAudioContext = new AudioContextConstructor();
-    }
-
-    return notificationAudioContext;
-}
-
 async function playNotificationSound() {
-    const audioContext = getNotificationAudioContext();
-    if (!audioContext) {
+    const bridge = getNativeNotificationBridge();
+    if (!bridge || typeof bridge.playAlertSound !== 'function') {
         return false;
     }
 
-    if (audioContext.state === 'suspended') {
-        await audioContext.resume();
-    }
-
-    if (audioContext.state !== 'running') {
-        return false;
-    }
-
-    const startTime = audioContext.currentTime;
-    const masterGain = audioContext.createGain();
-    masterGain.gain.setValueAtTime(0.0001, startTime);
-    masterGain.gain.exponentialRampToValueAtTime(0.18, startTime + 0.025);
-    masterGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.42);
-    masterGain.connect(audioContext.destination);
-
-    // 声音通知不依赖 Android 通知通道；用 WebAudio 合成短促双音，方便在酒馆页面内直接热更新验证。
-    [660, 880].forEach((frequency, index) => {
-        const oscillator = audioContext.createOscillator();
-        const toneGain = audioContext.createGain();
-        const toneStart = startTime + index * 0.09;
-        const toneEnd = toneStart + 0.2;
-
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(frequency, toneStart);
-        toneGain.gain.setValueAtTime(0.0001, toneStart);
-        toneGain.gain.exponentialRampToValueAtTime(1, toneStart + 0.02);
-        toneGain.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
-
-        oscillator.connect(toneGain);
-        toneGain.connect(masterGain);
-        oscillator.start(toneStart);
-        oscillator.stop(toneEnd + 0.02);
-    });
-
-    window.setTimeout(() => {
-        masterGain.disconnect();
-    }, 520);
-
-    return true;
+    // 提示音只走 Android 宿主原生播放；WebView/GeckoView 后台时网页音频不可靠。
+    return bridge.playAlertSound() === true;
 }
 
 function shouldListenForMessages() {
@@ -1008,7 +957,7 @@ async function setSoundNotificationEnabled(enabled) {
         });
 
         if (!canPlaySound) {
-            toastr.warning('当前 WebView 不支持提示音。', popupTitle);
+            toastr.warning('当前安卓宿主不支持提示音。', popupTitle);
             return { updated: false };
         }
     }

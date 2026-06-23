@@ -374,6 +374,7 @@
 
       const notificationBridge = {
         showNotification: function(payload) { return postBoolean('notification.show', String(payload || '')); },
+        playAlertSound: function() { return postBoolean('notification.playAlertSound', null); },
         permissionState: function() {
           refreshNotificationPermissionState();
           return notificationPermissionState;

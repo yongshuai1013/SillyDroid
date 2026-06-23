@@ -264,6 +264,7 @@ class GeckoViewBrowserHostBridgeInstaller(
             "getHostVersionInfo" -> androidHostBridge.getHostVersionInfo()
             "recordWebPerformanceDiagnostic" -> androidHostBridge.recordWebPerformanceDiagnostic(data.asString())
             "notification.show" -> notificationBridge.showNotification(data.asString())
+            "notification.playAlertSound" -> notificationBridge.playAlertSound()
             "notification.permissionState" -> notificationBridge.permissionState()
             "notification.requestPermission" -> notificationBridge.requestPermission()
             "download.preparing" -> blobDownloadBridge.onBlobDownloadPreparing(data.asString())

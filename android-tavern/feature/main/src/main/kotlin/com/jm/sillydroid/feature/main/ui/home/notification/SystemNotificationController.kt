@@ -15,7 +15,8 @@ import org.json.JSONObject
  */
 open class SystemNotificationController(
     private val hostNotificationService: HostNotificationService,
-    private val smallIconResId: Int
+    private val smallIconResId: Int,
+    private val alertSoundPlayer: SystemAlertSoundPlayer = NoOpSystemAlertSoundPlayer
 ) {
     open fun canPost(): Boolean {
         return hostNotificationService.canPostNotifications()
@@ -49,6 +50,10 @@ open class SystemNotificationController(
             )
         )
         return true
+    }
+
+    open fun playAlertSound(): Boolean {
+        return alertSoundPlayer.playMessageAlert()
     }
 
     private fun resolveNotificationKey(request: SystemNotificationRequest): String {
