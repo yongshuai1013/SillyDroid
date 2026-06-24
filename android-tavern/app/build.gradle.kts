@@ -320,6 +320,11 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        // targetSdk 28 是后端插件动态原生二进制执行能力的产品边界；本项目不走 Google Play 发布。
+        disable += "ExpiredTargetSdkVersion"
+    }
 }
 
 tasks.named("preBuild") {
