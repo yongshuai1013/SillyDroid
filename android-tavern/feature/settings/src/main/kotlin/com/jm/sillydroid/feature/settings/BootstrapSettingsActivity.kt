@@ -127,7 +127,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
     private lateinit var floatingLogsSwitch: MaterialSwitch
     private lateinit var backgroundOnlyModeSwitch: MaterialSwitch
     private lateinit var backgroundHealthCheckSwitch: MaterialSwitch
-    private lateinit var fastLaunchSwitch: MaterialSwitch
+    private lateinit var launchModeRow: View
+    private lateinit var launchModeValueView: TextView
     private lateinit var tavernRuntimePatchRow: View
     private lateinit var tavernRuntimePatchConfigureButton: MaterialButton
     private lateinit var tavernRuntimePatchSwitch: MaterialSwitch
@@ -370,7 +371,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
         floatingLogsSwitch = findViewById(R.id.bootstrapSettingsFloatingLogsSwitch)
         backgroundOnlyModeSwitch = findViewById(R.id.bootstrapSettingsBackgroundOnlyModeSwitch)
         backgroundHealthCheckSwitch = findViewById(R.id.bootstrapSettingsBackgroundHealthCheckSwitch)
-        fastLaunchSwitch = findViewById(R.id.bootstrapSettingsFastLaunchSwitch)
+        launchModeRow = findViewById(R.id.bootstrapSettingsLaunchModeRow)
+        launchModeValueView = findViewById(R.id.bootstrapSettingsLaunchModeValue)
         tavernRuntimePatchRow = findViewById(R.id.bootstrapSettingsRuntimePatchRow)
         tavernRuntimePatchConfigureButton = findViewById(R.id.bootstrapSettingsRuntimePatchConfigureButton)
         tavernRuntimePatchSwitch = findViewById(R.id.bootstrapSettingsRuntimePatchSwitch)
@@ -459,7 +461,7 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             floatingLogsSwitch = floatingLogsSwitch,
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
-            fastLaunchSwitch = fastLaunchSwitch,
+            launchModeRow = launchModeRow,
             tavernRuntimePatchRow = tavernRuntimePatchRow,
             tavernRuntimePatchConfigureButton = tavernRuntimePatchConfigureButton,
             tavernRuntimePatchSwitch = tavernRuntimePatchSwitch,
@@ -518,7 +520,8 @@ class BootstrapSettingsActivity : AppCompatActivity() {
             floatingLogsSwitch = floatingLogsSwitch,
             backgroundOnlyModeSwitch = backgroundOnlyModeSwitch,
             backgroundHealthCheckSwitch = backgroundHealthCheckSwitch,
-            fastLaunchSwitch = fastLaunchSwitch,
+            launchModeRow = launchModeRow,
+            launchModeValueView = launchModeValueView,
             tavernRuntimePatchRow = tavernRuntimePatchRow,
             tavernRuntimePatchConfigureButton = tavernRuntimePatchConfigureButton,
             tavernRuntimePatchSwitch = tavernRuntimePatchSwitch,

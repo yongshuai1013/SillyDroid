@@ -55,7 +55,7 @@ class BootstrapSettingsScreenController(
     private val floatingLogsSwitch: MaterialSwitch,
     private val backgroundOnlyModeSwitch: MaterialSwitch,
     private val backgroundHealthCheckSwitch: MaterialSwitch,
-    private val fastLaunchSwitch: MaterialSwitch,
+    private val launchModeRow: View,
     private val tavernRuntimePatchRow: View,
     private val tavernRuntimePatchConfigureButton: MaterialButton,
     private val tavernRuntimePatchSwitch: MaterialSwitch,
@@ -110,7 +110,7 @@ class BootstrapSettingsScreenController(
         floatingLogsSwitch.isEnabled = !busy
         backgroundOnlyModeSwitch.isEnabled = !busy
         backgroundHealthCheckSwitch.isEnabled = !busy
-        fastLaunchSwitch.isEnabled = !busy
+        launchModeRow.isEnabled = !busy
         tavernRuntimePatchRow.isEnabled = !busy
         tavernRuntimePatchConfigureButton.isEnabled = !busy
         tavernRuntimePatchSwitch.isEnabled = !busy

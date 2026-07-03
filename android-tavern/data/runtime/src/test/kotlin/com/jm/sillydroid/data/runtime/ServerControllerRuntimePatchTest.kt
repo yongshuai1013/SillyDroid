@@ -1,5 +1,6 @@
 package com.jm.sillydroid.data.runtime
 
+import com.jm.sillydroid.core.model.settings.TavernServerLaunchMode
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -23,7 +24,7 @@ class ServerControllerRuntimePatchTest {
                 servicePort = 8000,
                 nodeMaxOldSpaceMb = 3072,
                 nodeMaxSemiSpaceMb = 64,
-                tavernServerFastLaunchEnabled = true,
+                tavernServerLaunchMode = TavernServerLaunchMode.AUTO,
                 tavernRuntimePatchEnabled = false,
                 tavernRuntimePatchDisabledModuleIds = setOf("character-all-limited-concurrency"),
                 tavernRuntimePatchSettingOverrides = mapOf(
@@ -57,7 +58,7 @@ class ServerControllerRuntimePatchTest {
                 servicePort = 8000,
                 nodeMaxOldSpaceMb = 4096,
                 nodeMaxSemiSpaceMb = 128,
-                tavernServerFastLaunchEnabled = true,
+                tavernServerLaunchMode = TavernServerLaunchMode.FAST,
                 tavernRuntimePatchEnabled = true,
                 tavernRuntimePatchDisabledModuleIds = setOf("character-all-limited-concurrency"),
                 tavernRuntimePatchSettingOverrides = mapOf(
@@ -94,7 +95,7 @@ class ServerControllerRuntimePatchTest {
                 servicePort = 8000,
                 nodeMaxOldSpaceMb = 0,
                 nodeMaxSemiSpaceMb = 0,
-                tavernServerFastLaunchEnabled = false,
+                tavernServerLaunchMode = TavernServerLaunchMode.FULL,
                 tavernRuntimePatchEnabled = false,
                 tavernRuntimePatchDisabledModuleIds = emptySet(),
                 tavernRuntimePatchSettingOverrides = emptyMap(),

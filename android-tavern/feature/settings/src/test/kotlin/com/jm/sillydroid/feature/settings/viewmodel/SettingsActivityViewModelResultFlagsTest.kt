@@ -3,6 +3,7 @@ package com.jm.sillydroid.feature.settings.viewmodel
 import com.jm.sillydroid.core.model.settings.BrowserEngine
 import com.jm.sillydroid.core.model.settings.BrowserDataClearTarget
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
+import com.jm.sillydroid.core.model.settings.TavernServerLaunchMode
 import com.jm.sillydroid.domain.bootstrap.RuntimePatchSettingOverrides
 import com.jm.sillydroid.domain.settings.HostPreferencesRepository
 import org.junit.Assert.assertEquals
@@ -104,19 +105,19 @@ class SettingsActivityViewModelResultFlagsTest {
     }
 
     @Test
-    fun `server fast launch defaults on and persists toggle`() {
+    fun `server launch mode defaults auto and persists selection`() {
         val repository = FakeHostPreferencesRepository()
         val viewModel = SettingsActivityViewModel(repository)
 
-        assertTrue(viewModel.uiState.value.tavernServerFastLaunchEnabled)
+        assertEquals(TavernServerLaunchMode.AUTO, viewModel.uiState.value.tavernServerLaunchMode)
 
-        val changed = viewModel.setTavernServerFastLaunchEnabled(false)
-        val unchanged = viewModel.setTavernServerFastLaunchEnabled(false)
+        val changed = viewModel.setTavernServerLaunchMode(TavernServerLaunchMode.FULL)
+        val unchanged = viewModel.setTavernServerLaunchMode(TavernServerLaunchMode.FULL)
 
         assertTrue(changed)
         assertFalse(unchanged)
-        assertFalse(repository.tavernServerFastLaunchEnabled)
-        assertFalse(viewModel.uiState.value.tavernServerFastLaunchEnabled)
+        assertEquals(TavernServerLaunchMode.FULL, repository.tavernServerLaunchMode)
+        assertEquals(TavernServerLaunchMode.FULL, viewModel.uiState.value.tavernServerLaunchMode)
     }
 
     @Test
@@ -165,7 +166,7 @@ class SettingsActivityViewModelResultFlagsTest {
         override var browserPageZoomPercent: Int = 100
         override var launchWebViewOnReady: Boolean = true
         override var backgroundHealthCheckEnabled: Boolean = false
-        override var tavernServerFastLaunchEnabled: Boolean = true
+        override var tavernServerLaunchMode: TavernServerLaunchMode = TavernServerLaunchMode.AUTO
         override var tavernRuntimePatchEnabled: Boolean = false
         override var tavernRuntimePatchDisabledModuleIds: Set<String> = emptySet()
         override var tavernRuntimePatchSettingOverrides: RuntimePatchSettingOverrides = emptyMap()

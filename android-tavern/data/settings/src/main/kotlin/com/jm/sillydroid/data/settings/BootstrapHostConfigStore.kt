@@ -9,6 +9,7 @@ import com.jm.sillydroid.core.model.settings.FloatingLogRefreshIntervals
 import com.jm.sillydroid.core.model.settings.HostDisplayMode
 import com.jm.sillydroid.core.model.settings.NodeHeapLimitOptions
 import com.jm.sillydroid.core.model.settings.NodeNewSpaceLimitOptions
+import com.jm.sillydroid.core.model.settings.TavernServerLaunchMode
 import com.jm.sillydroid.core.model.settings.TerminalFontSizeOptions
 import com.jm.sillydroid.domain.bootstrap.RuntimePatchSettingOverrides
 import com.jm.sillydroid.domain.bootstrap.RuntimePatchSettingOverridesCodec
@@ -26,6 +27,7 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
         private const val browserPageZoomPercentKey = "browser-page-zoom-percent"
         private const val launchWebViewOnReadyKey = "launch-webview-on-ready"
         private const val backgroundHealthCheckEnabledKey = "background-health-check-enabled"
+        private const val tavernServerLaunchModeKey = "tavern-server-launch-mode"
         private const val tavernServerFastLaunchEnabledKey = "tavern-server-fast-launch-enabled"
         private const val tavernRuntimePatchEnabledKey = "tavern-runtime-patch-enabled"
         private const val tavernRuntimePatchDisabledModuleIdsKey = "tavern-runtime-patch-disabled-module-ids"
@@ -157,11 +159,25 @@ class BootstrapHostConfigStore(context: Context) : HostPreferencesRepository {
                 .apply()
         }
 
-    override var tavernServerFastLaunchEnabled: Boolean
-        get() = preferences.getBoolean(tavernServerFastLaunchEnabledKey, true)
+    override var tavernServerLaunchMode: TavernServerLaunchMode
+        get() {
+            val explicitMode = preferences.getString(tavernServerLaunchModeKey, null)
+            if (!explicitMode.isNullOrBlank()) {
+                return TavernServerLaunchMode.fromStorageValue(explicitMode)
+            }
+            return if (preferences.getBoolean(tavernServerFastLaunchEnabledKey, true)) {
+                TavernServerLaunchMode.AUTO
+            } else {
+                TavernServerLaunchMode.FULL
+            }
+        }
         set(value) {
             preferences.edit()
-                .putBoolean(tavernServerFastLaunchEnabledKey, value)
+                .putString(tavernServerLaunchModeKey, value.name)
+                .putBoolean(
+                    tavernServerFastLaunchEnabledKey,
+                    value != TavernServerLaunchMode.FULL
+                )
                 .apply()
         }
 
